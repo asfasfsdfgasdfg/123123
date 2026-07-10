@@ -13,6 +13,7 @@ YOUR_TELEGRAM_ID = 1795960713
 
 # ===== СПИСОК АДМИНИСТРАТОРОВ =====
 ADMINS = {YOUR_TELEGRAM_ID}  # Множество ID администраторов
+ADMIN_NAMES = {}  # {user_id: "имя"} - для хранения пользовательских имен администраторов
 
 ANTISPAM_SETTINGS = {
     "min_time_between_orders": 30,
@@ -35,6 +36,19 @@ total_orders_all_time = 0
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
+
+
+def get_admin_name(user_id: int) -> str:
+    if user_id in ADMIN_NAMES:
+        return ADMIN_NAMES[user_id]
+    try:
+        user = bot.get_chat(user_id)
+        if user.username:
+            return f"@{user.username}"
+        else:
+            return user.first_name
+    except:
+        return str(user_id)
 
 
 def get_user_order_data(user_id: int):
@@ -98,13 +112,20 @@ def order_button(product_name):
 async def start(message: types.Message):
     if is_admin(message.from_user.id):
         status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
-        admins_list = "\n".join([f"👤 `{admin_id}`" for admin_id in ADMINS])
+        admin_name = get_admin_name(message.from_user.id)
+
+        admins_list = []
+        for admin_id in ADMINS:
+            name = get_admin_name(admin_id)
+            admins_list.append(f"👤 {name} (`{admin_id}`)")
+        admins_text = "\n".join(admins_list)
+
         await message.answer(
-            f"👋 **Здравствуйте, Администратор!**\n\n"
+            f"👋 **Здравствуйте, {admin_name}!**\n\n"
             f"📊 Текущий статус: {status_text}\n"
             f"📦 Всего заказов: {total_orders_all_time}\n"
-            f"👥 Пользователей: {len(user_orders)}\n"
-            f"👑 Администраторы:\n{admins_list}\n\n"
+            f"👥 Пользователей: {len(user_orders)}\n\n"
+            f"👑 **Администраторы:**\n{admins_text}\n\n"
             f"🔧 **Доступные команды:**\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 `/pause` - Приостановить продажи\n"
@@ -115,6 +136,7 @@ async def start(message: types.Message):
             f"📌 `/add_admin ID` - Добавить администратора\n"
             f"📌 `/remove_admin ID` - Удалить администратора\n"
             f"📌 `/admins` - Список администраторов\n"
+            f"📌 `/setname Имя` - Установить своё имя\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Для просмотра каталога нажмите кнопку ниже:",
             reply_markup=catalog_button(),
@@ -128,17 +150,55 @@ async def start(message: types.Message):
         )
 
 
+@dp.message(Command("setname"))
+async def set_admin_name(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) != 2:
+        await message.answer(
+            "❌ Неправильный формат!\n\n"
+            "Используйте: `/setname Ваше имя`\n"
+            "Например: `/setname Алексей`\n\n"
+            "Имя будет отображаться в приветствии и списке администраторов."
+        )
+        return
+
+    new_name = args[1].strip()
+    if len(new_name) > 50:
+        await message.answer("❌ Имя не может быть длиннее 50 символов.")
+        return
+
+    ADMIN_NAMES[message.from_user.id] = new_name
+    await message.answer(
+        f"✅ Ваше имя успешно установлено!\n\n"
+        f"Теперь приветствие: **Здравствуйте, {new_name}!**",
+        parse_mode="Markdown"
+    )
+
+
 @dp.message(Command("admins"))
 async def show_admins(message: types.Message):
     if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
 
-    admins_list = "\n".join([f"👤 `{admin_id}`" for admin_id in ADMINS])
+    admins_list = []
+    for admin_id in ADMINS:
+        name = get_admin_name(admin_id)
+        if admin_id == YOUR_TELEGRAM_ID:
+            admins_list.append(f"⭐ {name} (`{admin_id}`) - Главный администратор")
+        else:
+            admins_list.append(f"👤 {name} (`{admin_id}`)")
+
+    admins_text = "\n".join(admins_list)
     await message.answer(
         f"👑 **Список администраторов:**\n\n"
-        f"{admins_list}\n\n"
-        f"Всего: {len(ADMINS)} администраторов",
+        f"{admins_text}\n\n"
+        f"Всего: {len(ADMINS)} администраторов\n\n"
+        f"⭐ - Главный администратор (не может быть удален)",
         parse_mode="Markdown"
     )
 
@@ -177,18 +237,21 @@ async def add_admin(message: types.Message):
     )
 
     try:
+        
+        new_admin_name = get_admin_name(new_admin_id)
         await bot.send_message(
             chat_id=new_admin_id,
-            text="🎉 **Поздравляю! Вы стали администратором бота!**\n\n"
-                 "Теперь вам доступны все команды управления:\n"
-                 "• /pause - приостановить продажи\n"
-                 "• /resume - возобновить продажи\n"
-                 "• /status - статистика\n"
-                 "• /reset_daily - сброс ежедневной статистики\n"
-                 "• /reset_all - полный сброс\n"
-                 "• /add_admin - добавить администратора\n"
-                 "• /remove_admin - удалить администратора\n\n"
-                 "Используйте /start для просмотра всех команд.",
+            text=f"🎉 **Поздравляю, {new_admin_name}! Вы стали администратором бота!**\n\n"
+                 f"Теперь вам доступны все команды управления:\n"
+                 f"• `/pause` - приостановить продажи\n"
+                 f"• `/resume` - возобновить продажи\n"
+                 f"• `/status` - статистика\n"
+                 f"• `/reset_daily` - сброс ежедневной статистики\n"
+                 f"• `/reset_all` - полный сброс\n"
+                 f"• `/add_admin` - добавить администратора\n"
+                 f"• `/remove_admin` - удалить администратора\n"
+                 f"• `/setname` - установить своё имя\n\n"
+                 f"Используйте `/start` для просмотра всех команд.",
             parse_mode="Markdown"
         )
     except:
@@ -225,6 +288,9 @@ async def remove_admin(message: types.Message):
         return
 
     ADMINS.remove(admin_id)
+    if admin_id in ADMIN_NAMES:
+        del ADMIN_NAMES[admin_id]
+
     await message.answer(
         f"✅ Администратор с ID `{admin_id}` успешно удален!\n\n"
         f"Этот пользователь больше не имеет доступа к админ-командам.",
@@ -417,6 +483,7 @@ async def main():
     print("  /add_admin ID   - добавить администратора")
     print("  /remove_admin ID - удалить администратора")
     print("  /admins         - список администраторов")
+    print("  /setname Имя    - установить своё имя")
     print("  /aarssf         - сбросить данные пользователей")
     await dp.start_polling(bot)
 
