@@ -5,6 +5,8 @@ from aiogram.filters import Command
 from aiogram.client.session.aiohttp import AiohttpSession
 from datetime import datetime
 import time
+import json
+import os
 
 session = AiohttpSession(timeout=300)
 
@@ -12,28 +14,35 @@ TOKEN = "8953142991:AAEH2bhrfROc8358a0dseSh5Hb04gPS0Xf4"
 YOUR_TELEGRAM_ID = 1795960713
 
 # ===== СПИСОК АДМИНИСТРАТОРОВ =====
-ADMINS = {YOUR_TELEGRAM_ID}  # Множество ID администраторов
-ADMIN_NAMES = {}  # {user_id: "имя"} - для хранения пользовательских имен администраторов
+ADMINS = {YOUR_TELEGRAM_ID}
+ADMIN_NAMES = {}
+
+# ===== ДАННЫЕ =====
+PRODUCTS = {
+    "Товар 1": {"price": "100 руб.", "desc": "Описание товара 1", "photo": "421.png"},
+    "Товар 2": {"price": "200 руб.", "desc": "Описание товара 2", "photo": "321.png"},
+    "Товар 3": {"price": "300 руб.", "desc": "Описание товара 3", "photo": "123.jpg"},
+}
 
 ANTISPAM_SETTINGS = {
     "min_time_between_orders": 30,
     "max_orders_per_day": 5,
 }
 
-PRODUCTS = {
-    "Товар 1": {"price": "n руб.", "desc": "abc", "photo": "421.png"},
-    "Товар 2": {"price": "n руб.", "desc": "abc", "photo": "321.png"},
-    "Товар 3": {"price": "n руб.", "desc": "abc", "photo": "123.jpg"},
-}
-
 bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher()
 
+# ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
 user_orders = {}
 sales_paused = False
 total_orders_all_time = 0
+product_stats = {}  # {product_name: count}
+user_order_history = {}  # {user_id: [{"product": name, "time": timestamp, "date": datetime}]}
+users_list = set()  # Все пользователи, которые взаимодействовали с ботом
+TEMP_DATA = {}  # Для временного хранения данных при добавлении товара
 
 
+# ===== ФУНКЦИИ =====
 def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
 
@@ -78,12 +87,26 @@ def check_order_limit(user_id: int) -> tuple[bool, str]:
     return True, ""
 
 
-def update_user_order(user_id: int):
+def update_user_order(user_id: int, product_name: str):
     global total_orders_all_time
+
     data = get_user_order_data(user_id)
     data["last_order_time"] = time.time()
     data["daily_orders"] += 1
     total_orders_all_time += 1
+
+    if product_name not in product_stats:
+        product_stats[product_name] = 0
+    product_stats[product_name] += 1
+
+    if user_id not in user_order_history:
+        user_order_history[user_id] = []
+    user_order_history[user_id].append({
+        "product": product_name,
+        "time": time.time(),
+        "date": datetime.now().strftime("%d.%m.%Y %H:%M")
+    })
+    users_list.add(user_id)
 
 
 def catalog_button():
@@ -108,8 +131,12 @@ def order_button(product_name):
     )
 
 
+# ===== КОМАНДЫ АДМИНИСТРАТОРА =====
+
 @dp.message(Command("start"))
 async def start(message: types.Message):
+    users_list.add(message.from_user.id)
+
     if is_admin(message.from_user.id):
         status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
         admin_name = get_admin_name(message.from_user.id)
@@ -124,7 +151,7 @@ async def start(message: types.Message):
             f"👋 **Здравствуйте, {admin_name}!**\n\n"
             f"📊 Текущий статус: {status_text}\n"
             f"📦 Всего заказов: {total_orders_all_time}\n"
-            f"👥 Пользователей: {len(user_orders)}\n\n"
+            f"👥 Пользователей: {len(users_list)}\n\n"
             f"👑 **Администраторы:**\n{admins_text}\n\n"
             f"🔧 **Доступные команды:**\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -137,6 +164,8 @@ async def start(message: types.Message):
             f"📌 `/remove_admin ID` - Удалить администратора\n"
             f"📌 `/admins` - Список администраторов\n"
             f"📌 `/setname Имя` - Установить своё имя\n"
+            f"📌 `/add_product` - Добавить новый товар\n"
+            f"📌 `/broadcast Текст` - Рассылка всем пользователям\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Для просмотра каталога нажмите кнопку ниже:",
             reply_markup=catalog_button(),
@@ -150,6 +179,232 @@ async def start(message: types.Message):
         )
 
 
+@dp.message(Command("status"))
+async def sales_status(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    status = "🔴 ПРИОСТАНОВЛЕНЫ" if sales_paused else "🟢 АКТИВНЫ"
+    users_count = len(users_list)
+    daily_orders = sum(data["daily_orders"] for data in user_orders.values())
+
+    # Статистика по товарам
+    product_stats_text = ""
+    if product_stats:
+        sorted_products = sorted(product_stats.items(), key=lambda x: x[1], reverse=True)
+        for i, (name, count) in enumerate(sorted_products, 1):
+            product_stats_text += f"{i}. {name}: {count} заказов\n"
+    else:
+        product_stats_text = "Заказов пока нет"
+
+    # История заказов (последние 10)
+    history_text = ""
+    all_orders = []
+    for user_id, orders in user_order_history.items():
+        for order in orders:
+            all_orders.append((order["date"], user_id, order["product"]))
+
+    all_orders.sort(key=lambda x: x[0], reverse=True)
+    recent_orders = all_orders[:10]
+
+    if recent_orders:
+        history_text = "📋 **Последние заказы:**\n"
+        for date, user_id, product in recent_orders:
+            history_text += f"• {date} - {product} (ID: {user_id})\n"
+    else:
+        history_text = "Заказов пока нет"
+
+    await message.answer(
+        f"📊 **СТАТИСТИКА ПРОДАЖ:**\n\n"
+        f"📌 Статус: {status}\n"
+        f"👥 Пользователей: {users_count}\n"
+        f"📦 Заказов сегодня: {daily_orders}\n"
+        f"🏆 Заказов за все время: {total_orders_all_time}\n\n"
+        f"📈 **Статистика по товарам:**\n{product_stats_text}\n\n"
+        f"{history_text}"
+    )
+
+
+@dp.message(Command("add_product"))
+async def add_product_start(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    TEMP_DATA[message.from_user.id] = {}
+    await message.answer(
+        "🛍 **Добавление нового товара**\n\n"
+        "Введите название товара:\n"
+        "(Отправьте 'отмена' чтобы отменить)"
+    )
+
+
+@dp.message()
+async def handle_add_product_steps(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    user_id = message.from_user.id
+    if user_id not in TEMP_DATA:
+        return
+
+    if message.text.lower() == "отмена":
+        del TEMP_DATA[user_id]
+        await message.answer("❌ Добавление товара отменено.")
+        return
+
+    data = TEMP_DATA[user_id]
+
+    if "name" not in data:
+        data["name"] = message.text
+        await message.answer(
+            f"✅ Название: {data['name']}\n\n"
+            "Введите цену товара (например: 500 руб.):"
+        )
+    elif "price" not in data:
+        data["price"] = message.text
+        await message.answer(
+            f"✅ Название: {data['name']}\n"
+            f"✅ Цена: {data['price']}\n\n"
+            "Введите описание товара:"
+        )
+    elif "desc" not in data:
+        data["desc"] = message.text
+        await message.answer(
+            f"✅ Название: {data['name']}\n"
+            f"✅ Цена: {data['price']}\n"
+            f"✅ Описание: {data['desc']}\n\n"
+            "📎 Отправьте фото товара (или отправьте 'пропустить'):"
+        )
+    elif "photo" not in data:
+        if message.text.lower() == "пропустить":
+            data["photo"] = None
+        elif message.photo:
+            # Скачиваем фото
+            photo = message.photo[-1]
+            file = await bot.get_file(photo.file_id)
+            file_path = f"images/{data['name']}_{int(time.time())}.jpg"
+            await bot.download_file(file.file_path, file_path)
+            data["photo"] = file_path
+        else:
+            await message.answer("❌ Отправьте фото или напишите 'пропустить':")
+            return
+
+        # Сохраняем товар
+        PRODUCTS[data["name"]] = {
+            "price": data["price"],
+            "desc": data["desc"],
+            "photo": data["photo"] if data["photo"] else "default.jpg"
+        }
+
+        del TEMP_DATA[user_id]
+        await message.answer(
+            f"✅ **Товар успешно добавлен!**\n\n"
+            f"📌 {data['name']}\n"
+            f"💰 {data['price']}\n"
+            f"📝 {data['desc']}\n\n"
+            f"Теперь товар доступен в каталоге.",
+            parse_mode="Markdown"
+        )
+
+
+@dp.message(Command("broadcast"))
+async def broadcast_message(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) != 2:
+        await message.answer(
+            "❌ Неправильный формат!\n\n"
+            "Используйте: `/broadcast Текст для рассылки`\n"
+            "Например: `/broadcast Внимание! Сегодня скидка 20%!`"
+        )
+        return
+
+    broadcast_text = args[1]
+
+    # Подтверждение
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Отправить", callback_data="confirm_broadcast"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_broadcast")
+            ]
+        ]
+    )
+
+    await message.answer(
+        f"📨 **Подтверждение рассылки**\n\n"
+        f"Будет отправлено **{len(users_list)}** пользователям.\n\n"
+        f"Текст сообщения:\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"{broadcast_text}\n"
+        f"━━━━━━━━━━━━━━━━\n\n"
+        f"Подтвердите отправку:",
+        reply_markup=keyboard
+    )
+
+    # Сохраняем текст для рассылки
+    TEMP_DATA[f"broadcast_{message.from_user.id}"] = broadcast_text
+
+
+@dp.callback_query(lambda c: c.data == "confirm_broadcast")
+async def confirm_broadcast(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    key = f"broadcast_{callback.from_user.id}"
+    if key not in TEMP_DATA:
+        await callback.answer("❌ Нет текста для рассылки.", show_alert=True)
+        return
+
+    broadcast_text = TEMP_DATA[key]
+    del TEMP_DATA[key]
+
+    await callback.message.edit_text("⏳ Идет отправка сообщений...")
+
+    success_count = 0
+    fail_count = 0
+
+    for user_id in users_list:
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"📢 **Объявление от администрации**\n\n{broadcast_text}",
+                parse_mode="Markdown"
+            )
+            success_count += 1
+            await asyncio.sleep(0.05)  # Небольшая задержка чтобы не заблокировали
+        except:
+            fail_count += 1
+
+    await callback.message.edit_text(
+        f"✅ **Рассылка завершена!**\n\n"
+        f"✅ Отправлено: {success_count}\n"
+        f"❌ Не доставлено: {fail_count}\n"
+        f"👥 Всего пользователей: {len(users_list)}"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data == "cancel_broadcast")
+async def cancel_broadcast(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    key = f"broadcast_{callback.from_user.id}"
+    if key in TEMP_DATA:
+        del TEMP_DATA[key]
+
+    await callback.message.edit_text("❌ Рассылка отменена.")
+    await callback.answer()
+
+
 @dp.message(Command("setname"))
 async def set_admin_name(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -161,8 +416,7 @@ async def set_admin_name(message: types.Message):
         await message.answer(
             "❌ Неправильный формат!\n\n"
             "Используйте: `/setname Ваше имя`\n"
-            "Например: `/setname Алексей`\n\n"
-            "Имя будет отображаться в приветствии и списке администраторов."
+            "Например: `/setname Алексей`"
         )
         return
 
@@ -197,8 +451,7 @@ async def show_admins(message: types.Message):
     await message.answer(
         f"👑 **Список администраторов:**\n\n"
         f"{admins_text}\n\n"
-        f"Всего: {len(ADMINS)} администраторов\n\n"
-        f"⭐ - Главный администратор (не может быть удален)",
+        f"Всего: {len(ADMINS)} администраторов",
         parse_mode="Markdown"
     )
 
@@ -213,8 +466,7 @@ async def add_admin(message: types.Message):
     if len(args) != 2:
         await message.answer(
             "❌ Неправильный формат!\n\n"
-            "Используйте: `/add_admin 123456789`\n"
-            "Где 123456789 - это ID пользователя Telegram."
+            "Используйте: `/add_admin 123456789`"
         )
         return
 
@@ -231,26 +483,15 @@ async def add_admin(message: types.Message):
 
     ADMINS.add(new_admin_id)
     await message.answer(
-        f"✅ Администратор с ID `{new_admin_id}` успешно добавлен!\n\n"
-        f"Теперь этот пользователь имеет доступ ко всем админ-командам.",
+        f"✅ Администратор с ID `{new_admin_id}` успешно добавлен!",
         parse_mode="Markdown"
     )
 
     try:
-        
         new_admin_name = get_admin_name(new_admin_id)
         await bot.send_message(
             chat_id=new_admin_id,
             text=f"🎉 **Поздравляю, {new_admin_name}! Вы стали администратором бота!**\n\n"
-                 f"Теперь вам доступны все команды управления:\n"
-                 f"• `/pause` - приостановить продажи\n"
-                 f"• `/resume` - возобновить продажи\n"
-                 f"• `/status` - статистика\n"
-                 f"• `/reset_daily` - сброс ежедневной статистики\n"
-                 f"• `/reset_all` - полный сброс\n"
-                 f"• `/add_admin` - добавить администратора\n"
-                 f"• `/remove_admin` - удалить администратора\n"
-                 f"• `/setname` - установить своё имя\n\n"
                  f"Используйте `/start` для просмотра всех команд.",
             parse_mode="Markdown"
         )
@@ -268,8 +509,7 @@ async def remove_admin(message: types.Message):
     if len(args) != 2:
         await message.answer(
             "❌ Неправильный формат!\n\n"
-            "Используйте: `/remove_admin 123456789`\n"
-            "Где 123456789 - это ID пользователя Telegram."
+            "Используйте: `/remove_admin 123456789`"
         )
         return
 
@@ -292,8 +532,7 @@ async def remove_admin(message: types.Message):
         del ADMIN_NAMES[admin_id]
 
     await message.answer(
-        f"✅ Администратор с ID `{admin_id}` успешно удален!\n\n"
-        f"Этот пользователь больше не имеет доступа к админ-командам.",
+        f"✅ Администратор с ID `{admin_id}` успешно удален!",
         parse_mode="Markdown"
     )
 
@@ -305,11 +544,7 @@ async def pause_sales(message: types.Message):
         return
     global sales_paused
     sales_paused = True
-    await message.answer(
-        "⏸ Продажи приостановлены!\n\n"
-        "Пользователи смогут просматривать каталог, но не смогут оформлять заказы.\n"
-        "Для возобновления используйте /resume"
-    )
+    await message.answer("⏸ Продажи приостановлены!")
 
 
 @dp.message(Command("resume"))
@@ -319,27 +554,7 @@ async def resume_sales(message: types.Message):
         return
     global sales_paused
     sales_paused = False
-    await message.answer(
-        "▶️ Продажи возобновлены!\n\n"
-        "Пользователи снова могут оформлять заказы."
-    )
-
-
-@dp.message(Command("status"))
-async def sales_status(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    status = "🔴 ПРИОСТАНОВЛЕНЫ" if sales_paused else "🟢 АКТИВНЫ"
-    users_count = len(user_orders)
-    daily_orders = sum(data["daily_orders"] for data in user_orders.values())
-    await message.answer(
-        f"📊 **СТАТИСТИКА ПРОДАЖ:**\n\n"
-        f"📌 Статус: {status}\n"
-        f"👥 Пользователей в кэше: {users_count}\n"
-        f"📦 Заказов сегодня: {daily_orders}\n"
-        f"🏆 Заказов за все время: {total_orders_all_time}"
-    )
+    await message.answer("▶️ Продажи возобновлены!")
 
 
 @dp.message(Command("reset_daily"))
@@ -351,11 +566,7 @@ async def reset_daily_orders(message: types.Message):
     for user_id in user_orders:
         user_orders[user_id]["daily_orders"] = 0
         user_orders[user_id]["last_reset_day"] = datetime.now().day
-    await message.answer(
-        "✅ Ежедневная статистика заказов сброшена!\n\n"
-        f"Все пользователи могут снова делать заказы.\n"
-        f"Всего за все время: {total_orders_all_time} заказов"
-    )
+    await message.answer("✅ Ежедневная статистика заказов сброшена!")
 
 
 @dp.message(Command("reset_all"))
@@ -363,17 +574,12 @@ async def reset_all_orders(message: types.Message):
     if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
-    global user_orders, total_orders_all_time
+    global user_orders, total_orders_all_time, product_stats, user_order_history
     user_orders = {}
     total_orders_all_time = 0
-    await message.answer(
-        "✅ **ВСЯ статистика заказов сброшена!**\n\n"
-        "Сброшено:\n"
-        "• Ежедневная статистика\n"
-        "• Статистика за все время\n"
-        "• Данные всех пользователей\n\n"
-        "Все пользователи могут снова делать заказы."
-    )
+    product_stats = {}
+    user_order_history = {}
+    await message.answer("✅ **ВСЯ статистика заказов сброшена!**")
 
 
 @dp.message(Command("aarssf"))
@@ -384,6 +590,8 @@ async def reset_orders(message: types.Message):
     global user_orders
     user_orders = {}
     await message.answer("✅ Статистика заказов успешно сброшена!")
+
+
 
 
 @dp.callback_query(lambda c: c.data == "catalog")
@@ -400,18 +608,42 @@ async def show_catalog(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("product_"))
 async def show_product(callback: types.CallbackQuery):
     product_name = callback.data.replace("product_", "")
+    if product_name not in PRODUCTS:
+        await callback.message.answer("❌ Товар не найден.")
+        await callback.answer()
+        return
+
     data = PRODUCTS[product_name]
-    photo_path = f"images/{data['photo']}"
 
     keyboard = order_button(product_name) if not sales_paused else InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🔴 Заказы временно недоступны", callback_data="no_order")]]
     )
 
-    await callback.message.answer_photo(
-        photo=types.FSInputFile(photo_path),
-        caption=f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
-        reply_markup=keyboard
-    )
+    try:
+        if data['photo'] and data['photo'] != "default.jpg":
+            photo_path = data['photo']
+            # Проверяем, существует ли файл
+            if os.path.exists(photo_path):
+                await callback.message.answer_photo(
+                    photo=types.FSInputFile(photo_path),
+                    caption=f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
+                    reply_markup=keyboard
+                )
+            else:
+                await callback.message.answer(
+                    f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
+                    reply_markup=keyboard
+                )
+        else:
+            await callback.message.answer(
+                f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
+                reply_markup=keyboard
+            )
+    except:
+        await callback.message.answer(
+            f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
+            reply_markup=keyboard
+        )
     await callback.answer()
 
 
@@ -421,8 +653,7 @@ async def send_order(callback: types.CallbackQuery):
 
     if sales_paused:
         await callback.message.answer(
-            "🔴 Извините, продажи временно приостановлены.\n\n"
-            "Пожалуйста, попробуйте позже.",
+            "🔴 Извините, продажи временно приостановлены.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
             )
@@ -448,14 +679,20 @@ async def send_order(callback: types.CallbackQuery):
     username = callback.from_user.username or "нет username"
 
     order_text = (
-        f"🛍 **Поступил новый заказ, инфа ниже!**\n\n"
+        f"🛍 **Поступил новый заказ!**\n\n"
         f"📦 Товар: {product_name}\n"
         f"👤 Username: @{username}\n"
         f"🆔 ID: {user_id}"
     )
 
-    await bot.send_message(chat_id=YOUR_TELEGRAM_ID, text=order_text)
-    update_user_order(user_id)
+
+    for admin_id in ADMINS:
+        try:
+            await bot.send_message(chat_id=admin_id, text=order_text)
+        except:
+            pass
+
+    update_user_order(user_id, product_name)
 
     await callback.message.answer(
         f"✅ Заказ создан! Мы свяжемся с вами в ближайшее время.",
@@ -472,19 +709,24 @@ async def no_order_handler(callback: types.CallbackQuery):
 
 
 async def main():
+
+    if not os.path.exists("images"):
+        os.makedirs("images")
+
     print("Бот готов для проверки...")
     print(f"\n👑 Главный администратор: {YOUR_TELEGRAM_ID}")
     print("\n📋 ДОСТУПНЫЕ КОМАНДЫ АДМИНА:")
     print("  /pause          - приостановить продажи")
     print("  /resume         - возобновить продажи")
-    print("  /status         - статус продаж и статистика")
+    print("  /status         - полная статистика")
     print("  /reset_daily    - сбросить ежедневную статистику")
     print("  /reset_all      - сбросить ВСЮ статистику")
     print("  /add_admin ID   - добавить администратора")
     print("  /remove_admin ID - удалить администратора")
     print("  /admins         - список администраторов")
     print("  /setname Имя    - установить своё имя")
-    print("  /aarssf         - сбросить данные пользователей")
+    print("  /add_product    - добавить новый товар")
+    print("  /broadcast Текст - рассылка всем пользователям")
     await dp.start_polling(bot)
 
 
