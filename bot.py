@@ -36,10 +36,17 @@ dp = Dispatcher()
 user_orders = {}
 sales_paused = False
 total_orders_all_time = 0
-product_stats = {}  # {product_name: count}
-user_order_history = {}  # {user_id: [{"product": name, "time": timestamp, "date": datetime}]}
-users_list = set()  # Все пользователи, которые взаимодействовали с ботом
-TEMP_DATA = {}  # Для временного хранения данных при добавлении товара
+product_stats = {}
+user_order_history = {}
+users_list = set()
+TEMP_DATA = {}
+
+
+# ===== ФУНКЦИЯ ДЛЯ ДОБАВЛЕНИЯ ПОЛЬЗОВАТЕЛЕЙ =====
+def add_user(user_id: int):
+    if user_id not in users_list:
+        users_list.add(user_id)
+        print(f"👤 Добавлен новый пользователь: {user_id}")
 
 
 # ===== ФУНКЦИИ =====
@@ -106,7 +113,7 @@ def update_user_order(user_id: int, product_name: str):
         "time": time.time(),
         "date": datetime.now().strftime("%d.%m.%Y %H:%M")
     })
-    users_list.add(user_id)
+    add_user(user_id)
 
 
 def catalog_button():
@@ -135,7 +142,7 @@ def order_button(product_name):
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    users_list.add(message.from_user.id)
+    add_user(message.from_user.id)
 
     if is_admin(message.from_user.id):
         status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
@@ -166,6 +173,8 @@ async def start(message: types.Message):
             f"📌 `/setname Имя` - Установить своё имя\n"
             f"📌 `/add_product` - Добавить новый товар\n"
             f"📌 `/broadcast Текст` - Рассылка всем пользователям\n"
+            f"📌 `/users_count` - Количество пользователей\n"
+            f"📌 `/test Текст` - Тестовая рассылка\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Для просмотра каталога нажмите кнопку ниже:",
             reply_markup=catalog_button(),
@@ -179,6 +188,50 @@ async def start(message: types.Message):
         )
 
 
+@dp.message(Command("users_count"))
+async def show_users_count(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    users_list_str = "\n".join([f"• {uid}" for uid in list(users_list)[:20]])
+    total = len(users_list)
+
+    await message.answer(
+        f"👥 **СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ:**\n\n"
+        f"Всего пользователей: **{total}**\n\n"
+        f"Последние 20 пользователей:\n"
+        f"{users_list_str if users_list_str else 'Нет пользователей'}"
+        f"\n\n{'... и еще ' + str(total - 20) if total > 20 else ''}"
+    )
+
+
+@dp.message(Command("test"))
+async def test_broadcast(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) != 2:
+        await message.answer(
+            "🧪 **Тестовая рассылка**\n\n"
+            "Используйте: `/test Текст для теста`\n\n"
+            "Это отправит сообщение только вам для проверки."
+        )
+        return
+
+    await message.answer(
+        f"🧪 **ТЕСТОВОЕ СООБЩЕНИЕ**\n\n"
+        f"✅ Рассылка работает!\n\n"
+        f"Ваше сообщение:\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"{args[1]}\n"
+        f"━━━━━━━━━━━━━━━━\n\n"
+        f"Всего пользователей в базе: {len(users_list)}"
+    )
+
+
 @dp.message(Command("status"))
 async def sales_status(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -189,7 +242,6 @@ async def sales_status(message: types.Message):
     users_count = len(users_list)
     daily_orders = sum(data["daily_orders"] for data in user_orders.values())
 
-    # Статистика по товарам
     product_stats_text = ""
     if product_stats:
         sorted_products = sorted(product_stats.items(), key=lambda x: x[1], reverse=True)
@@ -198,7 +250,6 @@ async def sales_status(message: types.Message):
     else:
         product_stats_text = "Заказов пока нет"
 
-    # История заказов (последние 10)
     history_text = ""
     all_orders = []
     for user_id, orders in user_order_history.items():
@@ -281,7 +332,6 @@ async def handle_add_product_steps(message: types.Message):
         if message.text.lower() == "пропустить":
             data["photo"] = None
         elif message.photo:
-            # Скачиваем фото
             photo = message.photo[-1]
             file = await bot.get_file(photo.file_id)
             file_path = f"images/{data['name']}_{int(time.time())}.jpg"
@@ -291,7 +341,6 @@ async def handle_add_product_steps(message: types.Message):
             await message.answer("❌ Отправьте фото или напишите 'пропустить':")
             return
 
-        # Сохраняем товар
         PRODUCTS[data["name"]] = {
             "price": data["price"],
             "desc": data["desc"],
@@ -320,13 +369,32 @@ async def broadcast_message(message: types.Message):
         await message.answer(
             "❌ Неправильный формат!\n\n"
             "Используйте: `/broadcast Текст для рассылки`\n"
-            "Например: `/broadcast Внимание! Сегодня скидка 20%!`"
+            "Например: `/broadcast Внимание! Сегодня скидка 20%!`\n\n"
+            f"👥 Пользователей в базе: {len(users_list)}"
         )
+        return
+
+    if len(users_list) == 0:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Всё равно отправить", callback_data="confirm_broadcast")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_broadcast")]
+            ]
+        )
+        await message.answer(
+            f"⚠️ **ВНИМАНИЕ!**\n\n"
+            f"В базе **нет пользователей** для рассылки.\n\n"
+            f"Чтобы добавить пользователей:\n"
+            f"• Пользователи должны написать боту команду /start\n"
+            f"• Или оформить заказ\n\n"
+            f"Хотите отправить тестовое сообщение?",
+            reply_markup=keyboard
+        )
+        TEMP_DATA[f"broadcast_{message.from_user.id}"] = args[1]
         return
 
     broadcast_text = args[1]
 
-    # Подтверждение
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -347,7 +415,6 @@ async def broadcast_message(message: types.Message):
         reply_markup=keyboard
     )
 
-    # Сохраняем текст для рассылки
     TEMP_DATA[f"broadcast_{message.from_user.id}"] = broadcast_text
 
 
@@ -367,10 +434,12 @@ async def confirm_broadcast(callback: types.CallbackQuery):
 
     await callback.message.edit_text("⏳ Идет отправка сообщений...")
 
+    total_users = len(users_list)
     success_count = 0
     fail_count = 0
+    failed_users = []
 
-    for user_id in users_list:
+    for i, user_id in enumerate(users_list):
         try:
             await bot.send_message(
                 chat_id=user_id,
@@ -378,16 +447,34 @@ async def confirm_broadcast(callback: types.CallbackQuery):
                 parse_mode="Markdown"
             )
             success_count += 1
-            await asyncio.sleep(0.05)  # Небольшая задержка чтобы не заблокировали
-        except:
-            fail_count += 1
 
-    await callback.message.edit_text(
+            if i % 10 == 0:
+                await callback.message.edit_text(
+                    f"⏳ Отправка сообщений... {i}/{total_users}\n"
+                    f"✅ Успешно: {success_count}\n"
+                    f"❌ Ошибок: {fail_count}"
+                )
+
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            fail_count += 1
+            failed_users.append(user_id)
+            print(f"❌ Ошибка отправки пользователю {user_id}: {e}")
+
+    result_text = (
         f"✅ **Рассылка завершена!**\n\n"
-        f"✅ Отправлено: {success_count}\n"
-        f"❌ Не доставлено: {fail_count}\n"
-        f"👥 Всего пользователей: {len(users_list)}"
+        f"📊 Результаты:\n"
+        f"✅ Успешно отправлено: **{success_count}**\n"
+        f"❌ Ошибок доставки: **{fail_count}**\n"
+        f"👥 Всего пользователей: **{total_users}**\n"
     )
+
+    if failed_users:
+        result_text += f"\n⚠️ Не доставлено пользователям:\n{', '.join(map(str, failed_users[:10]))}"
+        if len(failed_users) > 10:
+            result_text += f"\n... и еще {len(failed_users) - 10}"
+
+    await callback.message.edit_text(result_text)
     await callback.answer()
 
 
@@ -592,10 +679,9 @@ async def reset_orders(message: types.Message):
     await message.answer("✅ Статистика заказов успешно сброшена!")
 
 
-
-
 @dp.callback_query(lambda c: c.data == "catalog")
 async def show_catalog(callback: types.CallbackQuery):
+    add_user(callback.from_user.id)
     await callback.message.delete()
     status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
     await callback.message.answer(
@@ -607,6 +693,7 @@ async def show_catalog(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("product_"))
 async def show_product(callback: types.CallbackQuery):
+    add_user(callback.from_user.id)
     product_name = callback.data.replace("product_", "")
     if product_name not in PRODUCTS:
         await callback.message.answer("❌ Товар не найден.")
@@ -622,7 +709,6 @@ async def show_product(callback: types.CallbackQuery):
     try:
         if data['photo'] and data['photo'] != "default.jpg":
             photo_path = data['photo']
-            # Проверяем, существует ли файл
             if os.path.exists(photo_path):
                 await callback.message.answer_photo(
                     photo=types.FSInputFile(photo_path),
@@ -650,6 +736,8 @@ async def show_product(callback: types.CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith("order_"))
 async def send_order(callback: types.CallbackQuery):
     global sales_paused
+
+    add_user(callback.from_user.id)
 
     if sales_paused:
         await callback.message.answer(
@@ -685,7 +773,6 @@ async def send_order(callback: types.CallbackQuery):
         f"🆔 ID: {user_id}"
     )
 
-
     for admin_id in ADMINS:
         try:
             await bot.send_message(chat_id=admin_id, text=order_text)
@@ -709,11 +796,10 @@ async def no_order_handler(callback: types.CallbackQuery):
 
 
 async def main():
-
     if not os.path.exists("images"):
         os.makedirs("images")
 
-    print("Бот готов для проверки...")
+    print("🤖 Бот готов для проверки...")
     print(f"\n👑 Главный администратор: {YOUR_TELEGRAM_ID}")
     print("\n📋 ДОСТУПНЫЕ КОМАНДЫ АДМИНА:")
     print("  /pause          - приостановить продажи")
@@ -726,7 +812,10 @@ async def main():
     print("  /admins         - список администраторов")
     print("  /setname Имя    - установить своё имя")
     print("  /add_product    - добавить новый товар")
-    print("  /broadcast Текст - рассылка всем пользователям")
+    print("  /broadcast Текст - массовая рассылка")
+    print("  /users_count    - количество пользователей")
+    print("  /test Текст     - тестовая рассылка")
+    print("  /aarssf         - сбросить данные пользователей")
     await dp.start_polling(bot)
 
 
