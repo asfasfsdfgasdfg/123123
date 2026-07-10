@@ -123,7 +123,7 @@ def product_buttons():
 def order_button(product_name):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"pay_{product_name}")]
+            [InlineKeyboardButton(text="💳 Заказать", callback_data=f"order_{product_name}")]
         ]
     )
 
@@ -131,9 +131,7 @@ def order_button(product_name):
 def payment_buttons(product_name):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить картой", callback_data=f"process_pay_{product_name}")],
-            [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_pay_{product_name}")],
-            [InlineKeyboardButton(text="⬅️ Назад к товару", callback_data=f"product_{product_name}")]
+            [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"process_pay_{product_name}")]
         ]
     )
 
@@ -973,7 +971,7 @@ async def show_product(callback: types.CallbackQuery):
     caption = f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}"
 
     if data.get('custom', False):
-        caption += "\n\n🧵 **Это индивидуальный заказ!**\nПосле оплаты вам нужно будет ввести данные для пошива."
+        caption += "\n\n🧵 **Это индивидуальный заказ!**\nДля оформления заказа нажмите 'Заказать' и введите данные для пошива."
 
     try:
         if data['photo'] and data['photo'] != "default.jpg":
@@ -1002,62 +1000,58 @@ async def show_product(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(lambda c: c.data.startswith("pay_"))
-async def payment_screen(callback: types.CallbackQuery):
+@dp.callback_query(lambda c: c.data.startswith("order_"))
+async def start_order(callback: types.CallbackQuery):
     add_user(callback.from_user.id)
-    product_name = callback.data.replace("pay_", "")
+    product_name = callback.data.replace("order_", "")
     if product_name not in PRODUCTS:
         await callback.answer("❌ Товар не найден.")
         return
 
     data = PRODUCTS[product_name]
 
-    keyboard = payment_buttons(product_name)
+    if data.get('custom', False):
+        TEMP_DATA[callback.from_user.id] = {
+            "product": product_name,
+            "step": "size",
+            "custom_data": {}
+        }
+        await callback.message.edit_text(
+            f"🧵 **Индивидуальный заказ: {product_name}**\n\n"
+            f"Для пошива футболки нам нужны ваши данные.\n\n"
+            f"👕 Введите ваш размер футболки (S, M, L, XL, XXL):\n"
+            f"(Отправьте 'отмена' чтобы отменить заказ)"
+        )
+        await callback.answer()
+    else:
+        await payment_screen(callback, product_name)
+
+
+async def payment_screen(callback: types.CallbackQuery, product_name: str = None):
+    if not product_name:
+        product_name = callback.data.replace("pay_", "")
+
+    if product_name not in PRODUCTS:
+        await callback.answer("❌ Товар не найден.")
+        return
+
+    data = PRODUCTS[product_name]
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"process_pay_{product_name}")]
+        ]
+    )
 
     await callback.message.edit_text(
         f"💳 **Оплата товара**\n\n"
         f"📌 {product_name}\n"
         f"💰 {data['price']}\n"
         f"📝 {data['desc']}\n\n"
-        f"Для оплаты нажмите кнопку ниже.\n"
-        f"После оплаты нажмите 'Проверить оплату'",
+        f"Нажмите кнопку для оплаты.",
         reply_markup=keyboard
     )
     await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("process_pay_"))
-async def process_payment(callback: types.CallbackQuery):
-    add_user(callback.from_user.id)
-    product_name = callback.data.replace("process_pay_", "")
-    user_id = callback.from_user.id
-    data = PRODUCTS[product_name]
-
-    if data.get('custom', False):
-        TEMP_DATA[user_id] = {"product": product_name, "step": "name"}
-        await callback.message.edit_text(
-            f"🧵 **Индивидуальный заказ: {product_name}**\n\n"
-            f"Для пошива футболки нам нужны ваши данные.\n\n"
-            f"📝 Введите ваше полное имя:\n"
-            f"(Отправьте 'отмена' чтобы отменить заказ)"
-        )
-        await callback.answer()
-    else:
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"pay_{product_name}")],
-                [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_pay_{product_name}")]
-            ]
-        )
-
-        await callback.message.edit_text(
-            f"💰 **Оплата товара: {product_name}**\n\n"
-            f"Сумма: {data['price']}\n\n"
-            f"Нажмите 'Оплатить' для перехода к оплате.\n"
-            f"После оплаты нажмите 'Проверить оплату'.",
-            reply_markup=keyboard
-        )
-        await callback.answer()
 
 
 @dp.message()
@@ -1084,56 +1078,210 @@ async def handle_custom_order_data(message: types.Message):
 
     step = data["step"]
     product_name = data["product"]
+    custom_data = data.get("custom_data", {})
 
-    if step == "name":
-        data["full_name"] = message.text.strip()
-        data["step"] = "phone"
-        await message.answer(
-            f"✅ Имя сохранено: {data['full_name']}\n\n"
-            f"📞 Введите ваш номер телефона для связи:"
-        )
-
-    elif step == "phone":
-        data["phone"] = message.text.strip()
-        data["step"] = "size"
-        await message.answer(
-            f"✅ Телефон сохранен: {data['phone']}\n\n"
-            f"👕 Введите ваш размер футболки (S, M, L, XL, XXL):"
-        )
-
-    elif step == "size":
-        data["size"] = message.text.strip().upper()
+    if step == "size":
+        size = message.text.strip().upper()
+        if size not in ["S", "M", "L", "XL", "XXL"]:
+            await message.answer("❌ Пожалуйста, введите корректный размер: S, M, L, XL, XXL")
+            return
+        custom_data["size"] = size
+        data["custom_data"] = custom_data
         data["step"] = "address"
         await message.answer(
-            f"✅ Размер сохранен: {data['size']}\n\n"
+            f"✅ Размер сохранен: {size}\n\n"
             f"📍 Введите ваш адрес доставки:"
         )
 
     elif step == "address":
-        data["address"] = message.text.strip()
+        custom_data["address"] = message.text.strip()
+        data["custom_data"] = custom_data
         data["step"] = "comment"
         await message.answer(
-            f"✅ Адрес сохранен: {data['address']}\n\n"
+            f"✅ Адрес сохранен: {custom_data['address']}\n\n"
             f"📝 Введите дополнительные пожелания (или отправьте 'нет'):"
         )
 
     elif step == "comment":
         if message.text.lower() == "нет":
-            data["comment"] = "Без пожеланий"
+            custom_data["comment"] = "Без пожеланий"
         else:
-            data["comment"] = message.text.strip()
+            custom_data["comment"] = message.text.strip()
 
-        custom_data = {
-            "full_name": data.get("full_name", "Не указано"),
-            "phone": data.get("phone", "Не указан"),
-            "size": data.get("size", "Не указан"),
-            "address": data.get("address", "Не указан"),
-            "comment": data.get("comment", "Без пожеланий")
-        }
+        data["custom_data"] = custom_data
 
-        del TEMP_DATA[user_id]
+        # Показываем пользователю его данные для подтверждения
+        confirm_text = (
+            f"📋 **Проверьте введенные данные:**\n\n"
+            f"👕 Размер: {custom_data['size']}\n"
+            f"📍 Адрес: {custom_data['address']}\n"
+            f"📝 Пожелания: {custom_data['comment']}\n\n"
+            f"✅ Всё верно?"
+        )
 
-        username = message.from_user.username or "нет username"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Да, всё верно", callback_data=f"confirm_custom_{product_name}")],
+                [InlineKeyboardButton(text="✏️ Изменить данные", callback_data=f"edit_custom_{product_name}")]
+            ]
+        )
+
+        await message.answer(confirm_text, reply_markup=keyboard)
+
+
+@dp.callback_query(lambda c: c.data.startswith("confirm_custom_"))
+async def confirm_custom_order(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    product_name = callback.data.replace("confirm_custom_", "")
+
+    if user_id not in TEMP_DATA:
+        await callback.answer("❌ Данные не найдены. Попробуйте снова.", show_alert=True)
+        return
+
+    data = TEMP_DATA[user_id]
+    custom_data = data.get("custom_data", {})
+
+    if not custom_data:
+        await callback.answer("❌ Данные не найдены.", show_alert=True)
+        return
+
+    # Сохраняем данные для последующего использования
+    TEMP_DATA[user_id]["confirmed"] = True
+
+    await callback.message.edit_text(
+        f"✅ **Данные подтверждены!**\n\n"
+        f"👕 Размер: {custom_data['size']}\n"
+        f"📍 Адрес: {custom_data['address']}\n"
+        f"📝 Пожелания: {custom_data['comment']}\n\n"
+        f"Теперь вы можете оплатить заказ."
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"process_pay_custom_{product_name}")]
+        ]
+    )
+
+    await callback.message.answer(
+        f"💳 **Оплата товара: {product_name}**\n\n"
+        f"Сумма: {PRODUCTS[product_name]['price']}\n\n"
+        f"Нажмите кнопку для оплаты.",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_custom_"))
+async def edit_custom_order(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    product_name = callback.data.replace("edit_custom_", "")
+
+    if user_id not in TEMP_DATA:
+        await callback.answer("❌ Данные не найдены.", show_alert=True)
+        return
+
+    data = TEMP_DATA[user_id]
+    custom_data = data.get("custom_data", {})
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👕 Изменить размер", callback_data=f"edit_field_size_{product_name}")],
+            [InlineKeyboardButton(text="📍 Изменить адрес", callback_data=f"edit_field_address_{product_name}")],
+            [InlineKeyboardButton(text="📝 Изменить пожелания", callback_data=f"edit_field_comment_{product_name}")],
+            [InlineKeyboardButton(text="⬅️ Назад к данным", callback_data=f"back_to_custom_{product_name}")]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"✏️ **Что хотите изменить?**\n\n"
+        f"Текущие данные:\n"
+        f"👕 Размер: {custom_data.get('size', 'Не указан')}\n"
+        f"📍 Адрес: {custom_data.get('address', 'Не указан')}\n"
+        f"📝 Пожелания: {custom_data.get('comment', 'Без пожеланий')}",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_field_"))
+async def edit_custom_field(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    field = callback.data.replace("edit_field_", "")
+    parts = field.split("_")
+    field_name = parts[0]
+    product_name = "_".join(parts[1:])
+
+    if user_id not in TEMP_DATA:
+        await callback.answer("❌ Данные не найдены.", show_alert=True)
+        return
+
+    TEMP_DATA[user_id]["edit_field"] = field_name
+    TEMP_DATA[user_id]["step"] = f"edit_{field_name}"
+
+    field_names = {
+        "size": "👕 новый размер (S, M, L, XL, XXL)",
+        "address": "📍 новый адрес доставки",
+        "comment": "📝 новые пожелания"
+    }
+
+    await callback.message.edit_text(
+        f"Введите {field_names.get(field_name, 'новое значение')}:"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("back_to_custom_"))
+async def back_to_custom(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    product_name = callback.data.replace("back_to_custom_", "")
+
+    if user_id not in TEMP_DATA:
+        await callback.answer("❌ Данные не найдены.", show_alert=True)
+        return
+
+    data = TEMP_DATA[user_id]
+    custom_data = data.get("custom_data", {})
+
+    confirm_text = (
+        f"📋 **Проверьте введенные данные:**\n\n"
+        f"👕 Размер: {custom_data.get('size', 'Не указан')}\n"
+        f"📍 Адрес: {custom_data.get('address', 'Не указан')}\n"
+        f"📝 Пожелания: {custom_data.get('comment', 'Без пожеланий')}\n\n"
+        f"✅ Всё верно?"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, всё верно", callback_data=f"confirm_custom_{product_name}")],
+            [InlineKeyboardButton(text="✏️ Изменить данные", callback_data=f"edit_custom_{product_name}")]
+        ]
+    )
+
+    await callback.message.edit_text(confirm_text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("process_pay_"))
+async def process_payment(callback: types.CallbackQuery):
+    add_user(callback.from_user.id)
+    product_name = callback.data.replace("process_pay_", "")
+
+    if product_name.startswith("custom_"):
+        product_name = product_name.replace("custom_", "")
+        user_id = callback.from_user.id
+
+        if user_id not in TEMP_DATA:
+            await callback.answer("❌ Данные для пошива не найдены.", show_alert=True)
+            return
+
+        data = TEMP_DATA[user_id]
+        custom_data = data.get("custom_data", {})
+
+        if not data.get("confirmed", False):
+            await callback.answer("❌ Сначала подтвердите данные для пошива.", show_alert=True)
+            return
+
+        username = callback.from_user.username or "нет username"
 
         order_text = (
             f"🧵 **Индивидуальный заказ!**\n\n"
@@ -1142,11 +1290,9 @@ async def handle_custom_order_data(message: types.Message):
             f"👤 Username: @{username}\n"
             f"🆔 ID: {user_id}\n\n"
             f"📋 **Данные для пошива:**\n"
-            f"📝 Имя: {custom_data['full_name']}\n"
-            f"📞 Телефон: {custom_data['phone']}\n"
-            f"👕 Размер: {custom_data['size']}\n"
-            f"📍 Адрес: {custom_data['address']}\n"
-            f"📝 Пожелания: {custom_data['comment']}"
+            f"👕 Размер: {custom_data.get('size', 'Не указан')}\n"
+            f"📍 Адрес: {custom_data.get('address', 'Не указан')}\n"
+            f"📝 Пожелания: {custom_data.get('comment', 'Без пожеланий')}"
         )
 
         for admin_id in ADMINS:
@@ -1157,62 +1303,32 @@ async def handle_custom_order_data(message: types.Message):
 
         update_user_order(user_id, product_name, custom_data)
 
-        await message.answer(
+        del TEMP_DATA[user_id]
+
+        await callback.message.edit_text(
             f"✅ **Заказ на футболку оформлен!**\n\n"
             f"📋 Ваши данные:\n"
-            f"👤 Имя: {custom_data['full_name']}\n"
-            f"📞 Телефон: {custom_data['phone']}\n"
-            f"👕 Размер: {custom_data['size']}\n"
-            f"📍 Адрес: {custom_data['address']}\n"
-            f"📝 Пожелания: {custom_data['comment']}\n\n"
-            f"Мы свяжемся с вами для уточнения деталей.",
+            f"👕 Размер: {custom_data.get('size', 'Не указан')}\n"
+            f"📍 Адрес: {custom_data.get('address', 'Не указан')}\n"
+            f"📝 Пожелания: {custom_data.get('comment', 'Без пожеланий')}\n\n"
+            f"Спасибо за заказ! Мы свяжемся с вами для уточнения деталей.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
             )
         )
+        await callback.answer("✅ Заказ оформлен!")
 
-
-@dp.callback_query(lambda c: c.data.startswith("check_pay_"))
-async def check_payment(callback: types.CallbackQuery):
-    add_user(callback.from_user.id)
-    product_name = callback.data.replace("check_pay_", "")
-    user_id = callback.from_user.id
-
-    user_data = get_user_order_data(user_id)
-    daily_orders = user_data["daily_orders"]
-
-    data = PRODUCTS[product_name]
-
-    if data.get('custom', False):
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]
-            ]
-        )
-
-        await callback.message.edit_text(
-            f"✅ **Оплата прошла успешно!**\n\n"
-            f"Товар: {product_name}\n"
-            f"Сумма: {data['price']}\n\n"
-            f"Теперь введите данные для пошива.",
-            reply_markup=keyboard
-        )
-
-        TEMP_DATA[user_id] = {"product": product_name, "step": "name"}
-        await callback.answer("✅ Оплата подтверждена! Теперь введите данные.")
     else:
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]
-            ]
-        )
+        data = PRODUCTS[product_name]
 
         await callback.message.edit_text(
             f"✅ **Оплата прошла успешно!**\n\n"
             f"Товар: {product_name}\n"
             f"Сумма: {data['price']}\n\n"
             f"Спасибо за покупку! Мы свяжемся с вами в ближайшее время.",
-            reply_markup=keyboard
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
+            )
         )
 
         username = callback.from_user.username or "нет username"
@@ -1222,7 +1338,7 @@ async def check_payment(callback: types.CallbackQuery):
             f"📦 Товар: {product_name}\n"
             f"💰 Сумма: {data['price']}\n"
             f"👤 Username: @{username}\n"
-            f"🆔 ID: {user_id}"
+            f"🆔 ID: {callback.from_user.id}"
         )
 
         for admin_id in ADMINS:
@@ -1231,7 +1347,7 @@ async def check_payment(callback: types.CallbackQuery):
             except:
                 pass
 
-        update_user_order(user_id, product_name)
+        update_user_order(callback.from_user.id, product_name)
         await callback.answer("✅ Оплата подтверждена!")
 
 
