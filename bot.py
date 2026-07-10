@@ -115,7 +115,17 @@ def product_buttons():
 def order_button(product_name):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Оформить заказ", callback_data=f"order_{product_name}")]
+            [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"pay_{product_name}")]
+        ]
+    )
+
+
+def payment_buttons(product_name):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить картой", callback_data=f"process_pay_{product_name}")],
+            [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_pay_{product_name}")],
+            [InlineKeyboardButton(text="⬅️ Назад к товару", callback_data=f"product_{product_name}")]
         ]
     )
 
@@ -598,9 +608,9 @@ async def confirm_broadcast(callback: types.CallbackQuery):
     total_users = len(users_list)
     success_count = 0
     fail_count = 0
-    failed_users = []
+    removed_users = []
 
-    for i, user_id in enumerate(users_list):
+    for i, user_id in enumerate(list(users_list)):
         try:
             await bot.send_message(
                 chat_id=user_id,
@@ -611,7 +621,7 @@ async def confirm_broadcast(callback: types.CallbackQuery):
 
             if i % 10 == 0:
                 await callback.message.edit_text(
-                    f"⏳ Отправка сообщений... {i}/{total_users}\n"
+                    f"⏳ Отправка... {i}/{total_users}\n"
                     f"✅ Успешно: {success_count}\n"
                     f"❌ Ошибок: {fail_count}"
                 )
@@ -619,21 +629,22 @@ async def confirm_broadcast(callback: types.CallbackQuery):
             await asyncio.sleep(0.05)
         except Exception as e:
             fail_count += 1
-            failed_users.append(user_id)
-            print(f"❌ Ошибка отправки пользователю {user_id}: {e}")
+            error_text = str(e).lower()
+
+            if any(keyword in error_text for keyword in
+                   ["blocked", "chat not found", "user not found", "bot was stopped", "bot was blocked"]):
+                removed_users.append(user_id)
+                if user_id in users_list:
+                    users_list.remove(user_id)
 
     result_text = (
         f"✅ **Рассылка завершена!**\n\n"
         f"📊 Результаты:\n"
-        f"✅ Успешно отправлено: **{success_count}**\n"
-        f"❌ Ошибок доставки: **{fail_count}**\n"
-        f"👥 Всего пользователей: **{total_users}**\n"
+        f"✅ Успешно: **{success_count}**\n"
+        f"❌ Ошибок: **{fail_count}**\n"
+        f"🗑 Удалено: **{len(removed_users)}**\n"
+        f"👥 Осталось: **{len(users_list)}**\n"
     )
-
-    if failed_users:
-        result_text += f"\n⚠️ Не доставлено пользователям:\n{', '.join(map(str, failed_users[:10]))}"
-        if len(failed_users) > 10:
-            result_text += f"\n... и еще {len(failed_users) - 10}"
 
     await callback.message.edit_text(result_text)
     await callback.answer()
@@ -974,42 +985,80 @@ async def show_product(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(lambda c: c.data.startswith("order_"))
-async def send_order(callback: types.CallbackQuery):
-    global sales_paused
-
+@dp.callback_query(lambda c: c.data.startswith("pay_"))
+async def payment_screen(callback: types.CallbackQuery):
     add_user(callback.from_user.id)
-
-    if sales_paused:
-        await callback.message.answer(
-            "🔴 Извините, продажи временно приостановлены.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
-            )
-        )
-        await callback.answer()
+    product_name = callback.data.replace("pay_", "")
+    if product_name not in PRODUCTS:
+        await callback.answer("❌ Товар не найден.")
         return
 
+    data = PRODUCTS[product_name]
+
+    await callback.message.edit_text(
+        f"💳 **Оплата товара**\n\n"
+        f"📌 {product_name}\n"
+        f"💰 {data['price']}\n"
+        f"📝 {data['desc']}\n\n"
+        f"Для оплаты нажмите кнопку ниже.\n"
+        f"После оплаты нажмите 'Проверить оплату'",
+        reply_markup=payment_buttons(product_name)
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("process_pay_"))
+async def process_payment(callback: types.CallbackQuery):
+    add_user(callback.from_user.id)
+    product_name = callback.data.replace("process_pay_", "")
     user_id = callback.from_user.id
-    product_name = callback.data.replace("order_", "")
 
-    can_order, error_message = check_order_limit(user_id)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", callback_data=f"pay_{product_name}")],
+            [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_pay_{product_name}")]
+        ]
+    )
 
-    if not can_order:
-        await callback.message.answer(
-            f"{error_message}\n\nВы можете вернуться в каталог:",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
-            )
-        )
-        await callback.answer()
-        return
+    await callback.message.edit_text(
+        f"💰 **Оплата товара: {product_name}**\n\n"
+        f"Сумма: {PRODUCTS[product_name]['price']}\n\n"
+        f"Нажмите 'Оплатить' для перехода к оплате.\n"
+        f"После оплаты нажмите 'Проверить оплату'.",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("check_pay_"))
+async def check_payment(callback: types.CallbackQuery):
+    add_user(callback.from_user.id)
+    product_name = callback.data.replace("check_pay_", "")
+    user_id = callback.from_user.id
+
+    user_data = get_user_order_data(user_id)
+    daily_orders = user_data["daily_orders"]
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"✅ **Оплата прошла успешно!**\n\n"
+        f"Товар: {product_name}\n"
+        f"Сумма: {PRODUCTS[product_name]['price']}\n\n"
+        f"Спасибо за покупку! Мы свяжемся с вами в ближайшее время.",
+        reply_markup=keyboard
+    )
 
     username = callback.from_user.username or "нет username"
 
     order_text = (
-        f"🛍 **Поступил новый заказ!**\n\n"
+        f"🛍 **Оплачен заказ!**\n\n"
         f"📦 Товар: {product_name}\n"
+        f"💰 Сумма: {PRODUCTS[product_name]['price']}\n"
         f"👤 Username: @{username}\n"
         f"🆔 ID: {user_id}"
     )
@@ -1021,14 +1070,7 @@ async def send_order(callback: types.CallbackQuery):
             pass
 
     update_user_order(user_id, product_name)
-
-    await callback.message.answer(
-        f"✅ Заказ создан! Мы свяжемся с вами в ближайшее время.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
-        )
-    )
-    await callback.answer()
+    await callback.answer("✅ Оплата подтверждена!")
 
 
 @dp.callback_query(lambda c: c.data == "no_order")
