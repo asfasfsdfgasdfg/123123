@@ -11,6 +11,9 @@ session = AiohttpSession(timeout=300)
 TOKEN = "8953142991:AAEH2bhrfROc8358a0dseSh5Hb04gPS0Xf4"
 YOUR_TELEGRAM_ID = 1795960713
 
+# ===== СПИСОК АДМИНИСТРАТОРОВ =====
+ADMINS = {YOUR_TELEGRAM_ID}  # Множество ID администраторов
+
 ANTISPAM_SETTINGS = {
     "min_time_between_orders": 30,
     "max_orders_per_day": 5,
@@ -28,6 +31,10 @@ dp = Dispatcher()
 user_orders = {}
 sales_paused = False
 total_orders_all_time = 0
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMINS
 
 
 def get_user_order_data(user_id: int):
@@ -89,15 +96,15 @@ def order_button(product_name):
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    # Проверяем, админ ли это
-    if message.from_user.id == YOUR_TELEGRAM_ID:
-        # Панель администратора
+    if is_admin(message.from_user.id):
         status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
+        admins_list = "\n".join([f"👤 `{admin_id}`" for admin_id in ADMINS])
         await message.answer(
-            f"👋 **Приветствую!**\n\n"
+            f"👋 **Здравствуйте, Администратор!**\n\n"
             f"📊 Текущий статус: {status_text}\n"
             f"📦 Всего заказов: {total_orders_all_time}\n"
-            f"👥 Пользователей: {len(user_orders)}\n\n"
+            f"👥 Пользователей: {len(user_orders)}\n"
+            f"👑 Администраторы:\n{admins_list}\n\n"
             f"🔧 **Доступные команды:**\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 `/pause` - Приостановить продажи\n"
@@ -105,13 +112,15 @@ async def start(message: types.Message):
             f"📌 `/status` - Полная статистика\n"
             f"📌 `/reset_daily` - Сброс ежедневной статистики\n"
             f"📌 `/reset_all` - Полный сброс ВСЕЙ статистики\n"
-            f"📌 `/aarssf` - Сброс данных пользователей\n"
+            f"📌 `/add_admin ID` - Добавить администратора\n"
+            f"📌 `/remove_admin ID` - Удалить администратора\n"
+            f"📌 `/admins` - Список администраторов\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Для просмотра каталога нажмите кнопку ниже:",
-            reply_markup=catalog_button()
+            reply_markup=catalog_button(),
+            parse_mode="Markdown"
         )
     else:
-        # Обычный пользователь
         status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
         await message.answer(
             f"{status_text}\n\nНажмите кнопку ниже чтобы посмотреть каталог:",
@@ -119,12 +128,116 @@ async def start(message: types.Message):
         )
 
 
-@dp.message(Command("pause"))
-async def pause_sales(message: types.Message):
-    global sales_paused
-    if message.from_user.id != YOUR_TELEGRAM_ID:
+@dp.message(Command("admins"))
+async def show_admins(message: types.Message):
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
+
+    admins_list = "\n".join([f"👤 `{admin_id}`" for admin_id in ADMINS])
+    await message.answer(
+        f"👑 **Список администраторов:**\n\n"
+        f"{admins_list}\n\n"
+        f"Всего: {len(ADMINS)} администраторов",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(Command("add_admin"))
+async def add_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer(
+            "❌ Неправильный формат!\n\n"
+            "Используйте: `/add_admin 123456789`\n"
+            "Где 123456789 - это ID пользователя Telegram."
+        )
+        return
+
+    try:
+        new_admin_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!")
+        return
+
+    if new_admin_id in ADMINS:
+        await message.answer(f"❌ Пользователь с ID `{new_admin_id}` уже является администратором.",
+                             parse_mode="Markdown")
+        return
+
+    ADMINS.add(new_admin_id)
+    await message.answer(
+        f"✅ Администратор с ID `{new_admin_id}` успешно добавлен!\n\n"
+        f"Теперь этот пользователь имеет доступ ко всем админ-командам.",
+        parse_mode="Markdown"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=new_admin_id,
+            text="🎉 **Поздравляю! Вы стали администратором бота!**\n\n"
+                 "Теперь вам доступны все команды управления:\n"
+                 "• /pause - приостановить продажи\n"
+                 "• /resume - возобновить продажи\n"
+                 "• /status - статистика\n"
+                 "• /reset_daily - сброс ежедневной статистики\n"
+                 "• /reset_all - полный сброс\n"
+                 "• /add_admin - добавить администратора\n"
+                 "• /remove_admin - удалить администратора\n\n"
+                 "Используйте /start для просмотра всех команд.",
+            parse_mode="Markdown"
+        )
+    except:
+        pass
+
+
+@dp.message(Command("remove_admin"))
+async def remove_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer(
+            "❌ Неправильный формат!\n\n"
+            "Используйте: `/remove_admin 123456789`\n"
+            "Где 123456789 - это ID пользователя Telegram."
+        )
+        return
+
+    try:
+        admin_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!")
+        return
+
+    if admin_id == YOUR_TELEGRAM_ID:
+        await message.answer("❌ Вы не можете удалить главного администратора!")
+        return
+
+    if admin_id not in ADMINS:
+        await message.answer(f"❌ Пользователь с ID `{admin_id}` не является администратором.", parse_mode="Markdown")
+        return
+
+    ADMINS.remove(admin_id)
+    await message.answer(
+        f"✅ Администратор с ID `{admin_id}` успешно удален!\n\n"
+        f"Этот пользователь больше не имеет доступа к админ-командам.",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(Command("pause"))
+async def pause_sales(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+    global sales_paused
     sales_paused = True
     await message.answer(
         "⏸ Продажи приостановлены!\n\n"
@@ -135,10 +248,10 @@ async def pause_sales(message: types.Message):
 
 @dp.message(Command("resume"))
 async def resume_sales(message: types.Message):
-    global sales_paused
-    if message.from_user.id != YOUR_TELEGRAM_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
+    global sales_paused
     sales_paused = False
     await message.answer(
         "▶️ Продажи возобновлены!\n\n"
@@ -148,7 +261,7 @@ async def resume_sales(message: types.Message):
 
 @dp.message(Command("status"))
 async def sales_status(message: types.Message):
-    if message.from_user.id != YOUR_TELEGRAM_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     status = "🔴 ПРИОСТАНОВЛЕНЫ" if sales_paused else "🟢 АКТИВНЫ"
@@ -159,14 +272,13 @@ async def sales_status(message: types.Message):
         f"📌 Статус: {status}\n"
         f"👥 Пользователей в кэше: {users_count}\n"
         f"📦 Заказов сегодня: {daily_orders}\n"
-        f"🏆 Заказов за все время: {total_orders_all_time}\n"
-        f"⏱ Время: {datetime.now().strftime('%H:%M:%S')}"
+        f"🏆 Заказов за все время: {total_orders_all_time}"
     )
 
 
 @dp.message(Command("reset_daily"))
 async def reset_daily_orders(message: types.Message):
-    if message.from_user.id != YOUR_TELEGRAM_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     global user_orders
@@ -182,7 +294,7 @@ async def reset_daily_orders(message: types.Message):
 
 @dp.message(Command("reset_all"))
 async def reset_all_orders(message: types.Message):
-    if message.from_user.id != YOUR_TELEGRAM_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     global user_orders, total_orders_all_time
@@ -200,7 +312,7 @@ async def reset_all_orders(message: types.Message):
 
 @dp.message(Command("aarssf"))
 async def reset_orders(message: types.Message):
-    if message.from_user.id != YOUR_TELEGRAM_ID:
+    if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     global user_orders
@@ -295,13 +407,17 @@ async def no_order_handler(callback: types.CallbackQuery):
 
 async def main():
     print("Бот готов для проверки...")
+    print(f"\n👑 Главный администратор: {YOUR_TELEGRAM_ID}")
     print("\n📋 ДОСТУПНЫЕ КОМАНДЫ АДМИНА:")
-    print("  /pause      - приостановить продажи")
-    print("  /resume     - возобновить продажи")
-    print("  /status     - статус продаж и статистика")
-    print("  /reset_daily - сбросить ежедневную статистику")
-    print("  /reset_all  - сбросить ВСЮ статистику")
-    print("  /aarssf     - сбросить данные пользователей")
+    print("  /pause          - приостановить продажи")
+    print("  /resume         - возобновить продажи")
+    print("  /status         - статус продаж и статистика")
+    print("  /reset_daily    - сбросить ежедневную статистику")
+    print("  /reset_all      - сбросить ВСЮ статистику")
+    print("  /add_admin ID   - добавить администратора")
+    print("  /remove_admin ID - удалить администратора")
+    print("  /admins         - список администраторов")
+    print("  /aarssf         - сбросить данные пользователей")
     await dp.start_polling(bot)
 
 
