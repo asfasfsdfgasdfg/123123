@@ -4,29 +4,27 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.client.session.aiohttp import AiohttpSession
 
-# ===== НАСТРОЙКИ ПОДКЛЮЧЕНИЯ (С УВЕЛИЧЕННЫМ ТАЙМАУТОМ) =====
-# Увеличиваем таймаут до 5 минут (300 секунд)
+
 session = AiohttpSession(timeout=300)
 
-# ===== НАСТРОЙКИ =====
-TOKEN = "8840106422:AAGpM6GLcfZlvfUW8aJPCUtLcSGSbF03434"  # Вставьте новый токен от @BotFather
+
+TOKEN = "8953142991:AAEH2bhrfROc8358a0dseSh5Hb04gPS0Xf4"
 YOUR_TELEGRAM_ID = 1795960713  # Ваш ID
 
-# ===== ТОВАРЫ =====
+
 PRODUCTS = {
-    "Говно с маслом": {"price": "5000 руб.", "desc": "вкусно и недорого", "photo": "421.png"},
-    "Пенис мытый": {"price": "1200 руб.", "desc": "нормалдаке", "photo": "321.png"},
-    "Пенис немытый": {"price": "8000 руб.", "desc": "так себе", "photo": "123.jpg"},
+    "Товар 1": {"price": "n руб.", "desc": "abc", "photo": "421.png"},
+    "Товар 2": {"price": "n руб.", "desc": "abc", "photo": "321.png"},
+    "Товар 3": {"price": "n руб.", "desc": "abc", "photo": "123.jpg"},
 }
 
-# ===== ИНИЦИАЛИЗАЦИЯ (С УВЕЛИЧЕННЫМ ТАЙМАУТОМ) =====
 bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher()
 
 # ===== КЛАВИАТУРЫ =====
 def catalog_button():
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=" Каталог", callback_data="catalog")]]
+        inline_keyboard=[[InlineKeyboardButton(text="Каталог", callback_data="catalog")]]
     )
 
 def product_buttons():
@@ -39,15 +37,15 @@ def product_buttons():
 def order_button(product_name):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=" Накакать чуть чуть", callback_data=f"order_{product_name}")]
+            [InlineKeyboardButton(text="Оформить заказ", callback_data=f"order_{product_name}")]
         ]
     )
 
-# ===== ОБРАБОТЧИКИ КОМАНД =====
+
 @dp.message(Command("start"))
 async def start(message: types.Message):
     await message.answer(
-        "Хай гитлер! \nнасри ниже чтобы почекать че продаю:",
+        " \nНажмите кнопку ниже чтобы посмотреть каталог:",
         reply_markup=catalog_button()
     )
 
@@ -55,7 +53,7 @@ async def start(message: types.Message):
 async def show_catalog(callback: types.CallbackQuery):
     await callback.message.delete()
     await callback.message.answer(
-        " вот всякое говно:\nвыбери че хочш:",
+        "Все товары:\n:",
         reply_markup=product_buttons()
     )
     await callback.answer()
@@ -81,25 +79,25 @@ async def send_order(callback: types.CallbackQuery):
     user_id = callback.from_user.id
 
     order_text = (
-        f"🔔 **НОВЫЙ ЗАКАЗ!**\n\n"
-        f"🛒 Товар: {product_name}\n"
-        f"👤 Username: @{username}\n"
-        f"🆔 ID: {user_id}"
+        f" **Поступил новый заказ, инфа ниже!**\n\n"
+        f" Товар: {product_name}\n"
+        f" Username: @{username}\n"
+        f" ID: {user_id}"
     )
 
     await bot.send_message(chat_id=YOUR_TELEGRAM_ID, text=order_text)
 
     await callback.message.answer(
-        "✅ Все иди нахуй! Пока.",
+        "✅ Заказ создан! Мы свяжемся с вами в ближайшее время.",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="📦 Пук пук пук", callback_data="catalog")]]
+            inline_keyboard=[[InlineKeyboardButton(text="📦Вернуться в каталог", callback_data="catalog")]]
         )
     )
     await callback.answer()
 
 # ===== ЗАПУСК =====
 async def main():
-    print("✅ Бот запущен...")
+    print("Бот готов для проверки...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
