@@ -54,15 +54,18 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
 
 
-def get_admin_name(user_id: int) -> str:
+async def get_admin_name(user_id: int) -> str:
+    """Получает имя администратора"""
     if user_id in ADMIN_NAMES:
         return ADMIN_NAMES[user_id]
     try:
-        user = bot.get_chat(user_id)
+        user = await bot.get_chat(user_id)
         if user.username:
             return f"@{user.username}"
-        else:
+        elif user.first_name:
             return user.first_name
+        else:
+            return str(user_id)
     except:
         return str(user_id)
 
@@ -118,7 +121,7 @@ def update_user_order(user_id: int, product_name: str):
 
 def catalog_button():
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Каталог", callback_data="catalog")]]
+        inline_keyboard=[[InlineKeyboardButton(text="📦 Каталог", callback_data="catalog")]]
     )
 
 
@@ -133,7 +136,39 @@ def product_buttons():
 def order_button(product_name):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Оформить заказ", callback_data=f"order_{product_name}")]
+            [InlineKeyboardButton(text="✅ Оформить заказ", callback_data=f"order_{product_name}")]
+        ]
+    )
+
+
+def admin_product_buttons():
+    """Кнопки для управления товарами (для админа)"""
+    buttons = []
+    for name in PRODUCTS.keys():
+        buttons.append(InlineKeyboardButton(
+            text=f"✏️ {name}",
+            callback_data=f"edit_product_{name}"
+        ))
+    # Добавляем кнопку для добавления нового товара
+    buttons.append(InlineKeyboardButton(
+        text="➕ Добавить товар",
+        callback_data="add_product_admin"
+    ))
+    # Разбиваем по 2 кнопки в ряд
+    keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def product_management_buttons(product_name):
+    """Кнопки управления конкретным товаром"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Редактировать название", callback_data=f"edit_name_{product_name}")],
+            [InlineKeyboardButton(text="💰 Редактировать цену", callback_data=f"edit_price_{product_name}")],
+            [InlineKeyboardButton(text="📝 Редактировать описание", callback_data=f"edit_desc_{product_name}")],
+            [InlineKeyboardButton(text="🖼 Редактировать фото", callback_data=f"edit_photo_{product_name}")],
+            [InlineKeyboardButton(text="🗑 Удалить товар", callback_data=f"delete_product_{product_name}")],
+            [InlineKeyboardButton(text="⬅️ Назад к управлению", callback_data="manage_products")]
         ]
     )
 
@@ -146,11 +181,11 @@ async def start(message: types.Message):
 
     if is_admin(message.from_user.id):
         status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
-        admin_name = get_admin_name(message.from_user.id)
+        admin_name = await get_admin_name(message.from_user.id)
 
         admins_list = []
         for admin_id in ADMINS:
-            name = get_admin_name(admin_id)
+            name = await get_admin_name(admin_id)
             admins_list.append(f"👤 {name} (`{admin_id}`)")
         admins_text = "\n".join(admins_list)
 
@@ -171,7 +206,7 @@ async def start(message: types.Message):
             f"📌 `/remove_admin ID` - Удалить администратора\n"
             f"📌 `/admins` - Список администраторов\n"
             f"📌 `/setname Имя` - Установить своё имя\n"
-            f"📌 `/add_product` - Добавить новый товар\n"
+            f"📌 `/manage_products` - Управление товарами\n"
             f"📌 `/broadcast Текст` - Рассылка всем пользователям\n"
             f"📌 `/users_count` - Количество пользователей\n"
             f"📌 `/test Текст` - Тестовая рассылка\n"
@@ -187,6 +222,289 @@ async def start(message: types.Message):
             reply_markup=catalog_button()
         )
 
+
+# ===== УПРАВЛЕНИЕ ТОВАРАМИ =====
+
+@dp.message(Command("manage_products"))
+async def manage_products(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    await message.answer(
+        "🛍 **Управление товарами**\n\n"
+        "Выберите товар для редактирования или удаления:\n"
+        "Или нажмите 'Добавить товар' для создания нового.",
+        reply_markup=admin_product_buttons()
+    )
+
+
+@dp.callback_query(lambda c: c.data == "manage_products")
+async def manage_products_callback(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        "🛍 **Управление товарами**\n\n"
+        "Выберите товар для редактирования или удаления:\n"
+        "Или нажмите 'Добавить товар' для создания нового.",
+        reply_markup=admin_product_buttons()
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data == "add_product_admin")
+async def add_product_admin(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    TEMP_DATA[callback.from_user.id] = {}
+    await callback.message.edit_text(
+        "🛍 **Добавление нового товара**\n\n"
+        "Введите название товара:\n"
+        "(Отправьте 'отмена' чтобы отменить)"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_product_"))
+async def edit_product_menu(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("edit_product_", "")
+    if product_name not in PRODUCTS:
+        await callback.answer("❌ Товар не найден.", show_alert=True)
+        return
+
+    data = PRODUCTS[product_name]
+    await callback.message.edit_text(
+        f"📌 **Редактирование товара:** {product_name}\n\n"
+        f"💰 Цена: {data['price']}\n"
+        f"📝 Описание: {data['desc']}\n"
+        f"🖼 Фото: {'Есть' if data['photo'] and data['photo'] != 'default.jpg' else 'Нет'}\n\n"
+        f"Выберите что хотите изменить:",
+        reply_markup=product_management_buttons(product_name)
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_name_"))
+async def edit_product_name(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("edit_name_", "")
+    TEMP_DATA[callback.from_user.id] = {"action": "edit_name", "product": product_name}
+    await callback.message.edit_text(
+        f"✏️ **Редактирование названия**\n\n"
+        f"Текущее название: {product_name}\n\n"
+        f"Введите новое название товара:\n"
+        f"(Отправьте 'отмена' чтобы отменить)"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_price_"))
+async def edit_product_price(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("edit_price_", "")
+    TEMP_DATA[callback.from_user.id] = {"action": "edit_price", "product": product_name}
+    await callback.message.edit_text(
+        f"💰 **Редактирование цены**\n\n"
+        f"Текущая цена: {PRODUCTS[product_name]['price']}\n\n"
+        f"Введите новую цену товара:\n"
+        f"(Отправьте 'отмена' чтобы отменить)"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_desc_"))
+async def edit_product_desc(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("edit_desc_", "")
+    TEMP_DATA[callback.from_user.id] = {"action": "edit_desc", "product": product_name}
+    await callback.message.edit_text(
+        f"📝 **Редактирование описания**\n\n"
+        f"Текущее описание: {PRODUCTS[product_name]['desc']}\n\n"
+        f"Введите новое описание товара:\n"
+        f"(Отправьте 'отмена' чтобы отменить)"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("edit_photo_"))
+async def edit_product_photo(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("edit_photo_", "")
+    TEMP_DATA[callback.from_user.id] = {"action": "edit_photo", "product": product_name}
+    await callback.message.edit_text(
+        f"🖼 **Редактирование фото**\n\n"
+        f"Текущее фото: {'Есть' if PRODUCTS[product_name]['photo'] and PRODUCTS[product_name]['photo'] != 'default.jpg' else 'Нет'}\n\n"
+        f"Отправьте новое фото товара:\n"
+        f"(Отправьте 'пропустить' чтобы оставить текущее)"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("delete_product_"))
+async def delete_product(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("delete_product_", "")
+    if product_name not in PRODUCTS:
+        await callback.answer("❌ Товар не найден.", show_alert=True)
+        return
+
+    # Кнопки подтверждения удаления
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_{product_name}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="manage_products")]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"⚠️ **Подтверждение удаления**\n\n"
+        f"Вы уверены, что хотите удалить товар:\n"
+        f"📌 {product_name}\n\n"
+        f"Это действие нельзя отменить!",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("confirm_delete_"))
+async def confirm_delete_product(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет доступа.", show_alert=True)
+        return
+
+    product_name = callback.data.replace("confirm_delete_", "")
+    if product_name not in PRODUCTS:
+        await callback.answer("❌ Товар не найден.", show_alert=True)
+        return
+
+    # Удаляем товар
+    del PRODUCTS[product_name]
+
+    # Удаляем из статистики если есть
+    if product_name in product_stats:
+        del product_stats[product_name]
+
+    await callback.message.edit_text(
+        f"✅ Товар **{product_name}** успешно удален!"
+    )
+    await callback.answer()
+
+
+# ===== ОБРАБОТЧИК ДЛЯ РЕДАКТИРОВАНИЯ ТОВАРОВ =====
+
+@dp.message()
+async def handle_edit_product_steps(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    user_id = message.from_user.id
+    if user_id not in TEMP_DATA:
+        return
+
+    data = TEMP_DATA[user_id]
+    action = data.get("action")
+    product_name = data.get("product")
+
+    if message.text.lower() == "отмена":
+        del TEMP_DATA[user_id]
+        await message.answer("❌ Действие отменено.", reply_markup=admin_product_buttons())
+        return
+
+    if action == "edit_name":
+        new_name = message.text.strip()
+        if new_name in PRODUCTS and new_name != product_name:
+            await message.answer("❌ Товар с таким названием уже существует!")
+            return
+
+        # Сохраняем старые данные
+        old_data = PRODUCTS[product_name]
+        # Создаем новый товар с новым именем
+        PRODUCTS[new_name] = old_data
+        # Удаляем старый
+        del PRODUCTS[product_name]
+
+        # Обновляем статистику если есть
+        if product_name in product_stats:
+            product_stats[new_name] = product_stats[product_name]
+            del product_stats[product_name]
+
+        del TEMP_DATA[user_id]
+        await message.answer(
+            f"✅ Название товара успешно изменено!\n\n"
+            f"Было: {product_name}\n"
+            f"Стало: {new_name}",
+            reply_markup=admin_product_buttons()
+        )
+
+    elif action == "edit_price":
+        new_price = message.text.strip()
+        PRODUCTS[product_name]["price"] = new_price
+        del TEMP_DATA[user_id]
+        await message.answer(
+            f"✅ Цена товара **{product_name}** успешно обновлена!\n\n"
+            f"Новая цена: {new_price}",
+            reply_markup=admin_product_buttons()
+        )
+
+    elif action == "edit_desc":
+        new_desc = message.text.strip()
+        PRODUCTS[product_name]["desc"] = new_desc
+        del TEMP_DATA[user_id]
+        await message.answer(
+            f"✅ Описание товара **{product_name}** успешно обновлено!",
+            reply_markup=admin_product_buttons()
+        )
+
+    elif action == "edit_photo":
+        if message.photo:
+            # Удаляем старое фото если есть
+            old_photo = PRODUCTS[product_name].get("photo")
+            if old_photo and old_photo != "default.jpg" and os.path.exists(old_photo):
+                try:
+                    os.remove(old_photo)
+                except:
+                    pass
+
+            # Сохраняем новое фото
+            photo = message.photo[-1]
+            file = await bot.get_file(photo.file_id)
+            file_path = f"images/{product_name}_{int(time.time())}.jpg"
+            await bot.download_file(file.file_path, file_path)
+            PRODUCTS[product_name]["photo"] = file_path
+
+            del TEMP_DATA[user_id]
+            await message.answer(
+                f"✅ Фото товара **{product_name}** успешно обновлено!",
+                reply_markup=admin_product_buttons()
+            )
+        else:
+            await message.answer("❌ Пожалуйста, отправьте фото.")
+
+
+# ===== ОСТАЛЬНЫЕ КОМАНДЫ =====
 
 @dp.message(Command("users_count"))
 async def show_users_count(message: types.Message):
@@ -275,87 +593,6 @@ async def sales_status(message: types.Message):
         f"📈 **Статистика по товарам:**\n{product_stats_text}\n\n"
         f"{history_text}"
     )
-
-
-@dp.message(Command("add_product"))
-async def add_product_start(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    TEMP_DATA[message.from_user.id] = {}
-    await message.answer(
-        "🛍 **Добавление нового товара**\n\n"
-        "Введите название товара:\n"
-        "(Отправьте 'отмена' чтобы отменить)"
-    )
-
-
-@dp.message()
-async def handle_add_product_steps(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    user_id = message.from_user.id
-    if user_id not in TEMP_DATA:
-        return
-
-    if message.text.lower() == "отмена":
-        del TEMP_DATA[user_id]
-        await message.answer("❌ Добавление товара отменено.")
-        return
-
-    data = TEMP_DATA[user_id]
-
-    if "name" not in data:
-        data["name"] = message.text
-        await message.answer(
-            f"✅ Название: {data['name']}\n\n"
-            "Введите цену товара (например: 500 руб.):"
-        )
-    elif "price" not in data:
-        data["price"] = message.text
-        await message.answer(
-            f"✅ Название: {data['name']}\n"
-            f"✅ Цена: {data['price']}\n\n"
-            "Введите описание товара:"
-        )
-    elif "desc" not in data:
-        data["desc"] = message.text
-        await message.answer(
-            f"✅ Название: {data['name']}\n"
-            f"✅ Цена: {data['price']}\n"
-            f"✅ Описание: {data['desc']}\n\n"
-            "📎 Отправьте фото товара (или отправьте 'пропустить'):"
-        )
-    elif "photo" not in data:
-        if message.text.lower() == "пропустить":
-            data["photo"] = None
-        elif message.photo:
-            photo = message.photo[-1]
-            file = await bot.get_file(photo.file_id)
-            file_path = f"images/{data['name']}_{int(time.time())}.jpg"
-            await bot.download_file(file.file_path, file_path)
-            data["photo"] = file_path
-        else:
-            await message.answer("❌ Отправьте фото или напишите 'пропустить':")
-            return
-
-        PRODUCTS[data["name"]] = {
-            "price": data["price"],
-            "desc": data["desc"],
-            "photo": data["photo"] if data["photo"] else "default.jpg"
-        }
-
-        del TEMP_DATA[user_id]
-        await message.answer(
-            f"✅ **Товар успешно добавлен!**\n\n"
-            f"📌 {data['name']}\n"
-            f"💰 {data['price']}\n"
-            f"📝 {data['desc']}\n\n"
-            f"Теперь товар доступен в каталоге.",
-            parse_mode="Markdown"
-        )
 
 
 @dp.message(Command("broadcast"))
@@ -528,7 +765,7 @@ async def show_admins(message: types.Message):
 
     admins_list = []
     for admin_id in ADMINS:
-        name = get_admin_name(admin_id)
+        name = await get_admin_name(admin_id)
         if admin_id == YOUR_TELEGRAM_ID:
             admins_list.append(f"⭐ {name} (`{admin_id}`) - Главный администратор")
         else:
@@ -575,7 +812,7 @@ async def add_admin(message: types.Message):
     )
 
     try:
-        new_admin_name = get_admin_name(new_admin_id)
+        new_admin_name = await get_admin_name(new_admin_id)
         await bot.send_message(
             chat_id=new_admin_id,
             text=f"🎉 **Поздравляю, {new_admin_name}! Вы стали администратором бота!**\n\n"
@@ -679,6 +916,8 @@ async def reset_orders(message: types.Message):
     await message.answer("✅ Статистика заказов успешно сброшена!")
 
 
+# ===== КОМАНДЫ ПОЛЬЗОВАТЕЛЕЙ =====
+
 @dp.callback_query(lambda c: c.data == "catalog")
 async def show_catalog(callback: types.CallbackQuery):
     add_user(callback.from_user.id)
@@ -691,7 +930,7 @@ async def show_catalog(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(lambda c: c.data.startswith("product_"))
+@dp.callback_query(lambda c: c.data.startswith("product_") and not c.data.startswith("product_management"))
 async def show_product(callback: types.CallbackQuery):
     add_user(callback.from_user.id)
     product_name = callback.data.replace("product_", "")
@@ -811,11 +1050,10 @@ async def main():
     print("  /remove_admin ID - удалить администратора")
     print("  /admins         - список администраторов")
     print("  /setname Имя    - установить своё имя")
-    print("  /add_product    - добавить новый товар")
+    print("  /manage_products - управление товарами")
     print("  /broadcast Текст - массовая рассылка")
     print("  /users_count    - количество пользователей")
     print("  /test Текст     - тестовая рассылка")
-    print("  /aarssf         - сбросить данные пользователей")
     await dp.start_polling(bot)
 
 
