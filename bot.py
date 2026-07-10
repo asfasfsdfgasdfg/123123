@@ -13,11 +13,11 @@ session = AiohttpSession(timeout=300)
 TOKEN = "8953142991:AAEH2bhrfROc8358a0dseSh5Hb04gPS0Xf4"
 YOUR_TELEGRAM_ID = 1795960713
 
-# ===== СПИСОК АДМИНИСТРАТОРОВ =====
+
 ADMINS = {YOUR_TELEGRAM_ID}
 ADMIN_NAMES = {}
 
-# ===== ДАННЫЕ =====
+
 PRODUCTS = {
     "Товар 1": {"price": "100 руб.", "desc": "Описание товара 1", "photo": "421.png"},
     "Товар 2": {"price": "200 руб.", "desc": "Описание товара 2", "photo": "321.png"},
@@ -32,7 +32,7 @@ ANTISPAM_SETTINGS = {
 bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher()
 
-# ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
+
 user_orders = {}
 sales_paused = False
 total_orders_all_time = 0
@@ -42,22 +42,34 @@ users_list = set()
 TEMP_DATA = {}
 
 
-# ===== ФУНКЦИЯ ДЛЯ ДОБАВЛЕНИЯ ПОЛЬЗОВАТЕЛЕЙ =====
+
 def add_user(user_id: int):
     if user_id not in users_list:
         users_list.add(user_id)
         print(f"👤 Добавлен новый пользователь: {user_id}")
 
 
-# ===== ФУНКЦИИ =====
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
 
 
-async def get_admin_name(user_id: int) -> str:
-    """Получает имя администратора"""
+
+def get_admin_name_sync(user_id: int) -> str:
+
+
     if user_id in ADMIN_NAMES:
         return ADMIN_NAMES[user_id]
+    return str(user_id)
+
+
+
+async def get_admin_name_async(user_id: int) -> str:
+
+    if user_id in ADMIN_NAMES:
+        return ADMIN_NAMES[user_id]
+
+    # Пробуем получить из Telegram
     try:
         user = await bot.get_chat(user_id)
         if user.username:
@@ -69,6 +81,204 @@ async def get_admin_name(user_id: int) -> str:
     except:
         return str(user_id)
 
+
+
+@dp.message(Command("setname"))
+async def set_admin_name(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) != 2:
+        await message.answer(
+            "❌ Неправильный формат!\n\n"
+            "Используйте: `/setname Ваше имя`\n"
+            "Например: `/setname Алексей`"
+        )
+        return
+
+    new_name = args[1].strip()
+    if len(new_name) > 50:
+        await message.answer("❌ Имя не может быть длиннее 50 символов.")
+        return
+
+
+    ADMIN_NAMES[message.from_user.id] = new_name
+
+    await message.answer(
+        f"✅ Ваше имя успешно установлено!\n\n"
+        f"Теперь приветствие: **Здравствуйте, {new_name}!**",
+        parse_mode="Markdown"
+    )
+
+
+
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    add_user(message.from_user.id)
+
+    if is_admin(message.from_user.id):
+        status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
+
+
+        admin_name = ADMIN_NAMES.get(message.from_user.id)
+        if not admin_name:
+
+            try:
+                user = await bot.get_chat(message.from_user.id)
+                if user.username:
+                    admin_name = f"@{user.username}"
+                elif user.first_name:
+                    admin_name = user.first_name
+                else:
+                    admin_name = str(message.from_user.id)
+            except:
+                admin_name = str(message.from_user.id)
+
+
+        admins_list = []
+        for admin_id in ADMINS:
+            name = ADMIN_NAMES.get(admin_id)
+            if not name:
+                try:
+                    user = await bot.get_chat(admin_id)
+                    if user.username:
+                        name = f"@{user.username}"
+                    elif user.first_name:
+                        name = user.first_name
+                    else:
+                        name = str(admin_id)
+                except:
+                    name = str(admin_id)
+            admins_list.append(f"👤 {name} (`{admin_id}`)")
+        admins_text = "\n".join(admins_list)
+
+        await message.answer(
+            f"👋 **Здравствуйте, {admin_name}!**\n\n"
+            f"📊 Текущий статус: {status_text}\n"
+            f"📦 Всего заказов: {total_orders_all_time}\n"
+            f"👥 Пользователей: {len(users_list)}\n\n"
+            f"👑 **Администраторы:**\n{admins_text}\n\n"
+            f"🔧 **Доступные команды:**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 `/pause` - Приостановить продажи\n"
+            f"📌 `/resume` - Возобновить продажи\n"
+            f"📌 `/status` - Полная статистика\n"
+            f"📌 `/reset_daily` - Сброс ежедневной статистики\n"
+            f"📌 `/reset_all` - Полный сброс ВСЕЙ статистики\n"
+            f"📌 `/add_admin ID` - Добавить администратора\n"
+            f"📌 `/remove_admin ID` - Удалить администратора\n"
+            f"📌 `/admins` - Список администраторов\n"
+            f"📌 `/setname Имя` - Установить своё имя\n"
+            f"📌 `/manage_products` - Управление товарами\n"
+            f"📌 `/broadcast Текст` - Рассылка всем пользователям\n"
+            f"📌 `/users_count` - Количество пользователей\n"
+            f"📌 `/test Текст` - Тестовая рассылка\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Для просмотра каталога нажмите кнопку ниже:",
+            reply_markup=catalog_button(),
+            parse_mode="Markdown"
+        )
+    else:
+        status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
+        await message.answer(
+            f"{status_text}\n\nНажмите кнопку ниже чтобы посмотреть каталог:",
+            reply_markup=catalog_button()
+        )
+
+
+
+@dp.message(Command("admins"))
+async def show_admins(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    admins_list = []
+    for admin_id in ADMINS:
+        name = ADMIN_NAMES.get(admin_id)
+        if not name:
+            try:
+                user = await bot.get_chat(admin_id)
+                if user.username:
+                    name = f"@{user.username}"
+                elif user.first_name:
+                    name = user.first_name
+                else:
+                    name = str(admin_id)
+            except:
+                name = str(admin_id)
+
+        if admin_id == YOUR_TELEGRAM_ID:
+            admins_list.append(f"⭐ {name} (`{admin_id}`) - Главный администратор")
+        else:
+            admins_list.append(f"👤 {name} (`{admin_id}`)")
+
+    admins_text = "\n".join(admins_list)
+    await message.answer(
+        f"👑 **Список администраторов:**\n\n"
+        f"{admins_text}\n\n"
+        f"Всего: {len(ADMINS)} администраторов",
+        parse_mode="Markdown"
+    )
+
+
+
+@dp.message(Command("add_admin"))
+async def add_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer(
+            "❌ Неправильный формат!\n\n"
+            "Используйте: `/add_admin 123456789`"
+        )
+        return
+
+    try:
+        new_admin_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID должен быть числом!")
+        return
+
+    if new_admin_id in ADMINS:
+        await message.answer(f"❌ Пользователь с ID `{new_admin_id}` уже является администратором.",
+                             parse_mode="Markdown")
+        return
+
+    ADMINS.add(new_admin_id)
+    await message.answer(
+        f"✅ Администратор с ID `{new_admin_id}` успешно добавлен!",
+        parse_mode="Markdown"
+    )
+
+    try:
+
+        new_name = ADMIN_NAMES.get(new_admin_id)
+        if not new_name:
+            try:
+                user = await bot.get_chat(new_admin_id)
+                if user.username:
+                    new_name = f"@{user.username}"
+                elif user.first_name:
+                    new_name = user.first_name
+                else:
+                    new_name = str(new_admin_id)
+            except:
+                new_name = str(new_admin_id)
+
+        await bot.send_message(
+            chat_id=new_admin_id,
+            text=f"🎉 **Поздравляю, {new_name}! Вы стали администратором бота!**\n\n"
+                 f"Используйте `/start` для просмотра всех команд.",
+            parse_mode="Markdown"
+        )
+    except:
+        pass
 
 def get_user_order_data(user_id: int):
     today = datetime.now().day
@@ -142,25 +352,21 @@ def order_button(product_name):
 
 
 def admin_product_buttons():
-    """Кнопки для управления товарами (для админа)"""
     buttons = []
     for name in PRODUCTS.keys():
         buttons.append(InlineKeyboardButton(
             text=f"✏️ {name}",
             callback_data=f"edit_product_{name}"
         ))
-    # Добавляем кнопку для добавления нового товара
     buttons.append(InlineKeyboardButton(
         text="➕ Добавить товар",
         callback_data="add_product_admin"
     ))
-    # Разбиваем по 2 кнопки в ряд
     keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def product_management_buttons(product_name):
-    """Кнопки управления конкретным товаром"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Редактировать название", callback_data=f"edit_name_{product_name}")],
@@ -171,59 +377,6 @@ def product_management_buttons(product_name):
             [InlineKeyboardButton(text="⬅️ Назад к управлению", callback_data="manage_products")]
         ]
     )
-
-
-# ===== КОМАНДЫ АДМИНИСТРАТОРА =====
-
-@dp.message(Command("start"))
-async def start(message: types.Message):
-    add_user(message.from_user.id)
-
-    if is_admin(message.from_user.id):
-        status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
-        admin_name = await get_admin_name(message.from_user.id)
-
-        admins_list = []
-        for admin_id in ADMINS:
-            name = await get_admin_name(admin_id)
-            admins_list.append(f"👤 {name} (`{admin_id}`)")
-        admins_text = "\n".join(admins_list)
-
-        await message.answer(
-            f"👋 **Здравствуйте, {admin_name}!**\n\n"
-            f"📊 Текущий статус: {status_text}\n"
-            f"📦 Всего заказов: {total_orders_all_time}\n"
-            f"👥 Пользователей: {len(users_list)}\n\n"
-            f"👑 **Администраторы:**\n{admins_text}\n\n"
-            f"🔧 **Доступные команды:**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 `/pause` - Приостановить продажи\n"
-            f"📌 `/resume` - Возобновить продажи\n"
-            f"📌 `/status` - Полная статистика\n"
-            f"📌 `/reset_daily` - Сброс ежедневной статистики\n"
-            f"📌 `/reset_all` - Полный сброс ВСЕЙ статистики\n"
-            f"📌 `/add_admin ID` - Добавить администратора\n"
-            f"📌 `/remove_admin ID` - Удалить администратора\n"
-            f"📌 `/admins` - Список администраторов\n"
-            f"📌 `/setname Имя` - Установить своё имя\n"
-            f"📌 `/manage_products` - Управление товарами\n"
-            f"📌 `/broadcast Текст` - Рассылка всем пользователям\n"
-            f"📌 `/users_count` - Количество пользователей\n"
-            f"📌 `/test Текст` - Тестовая рассылка\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Для просмотра каталога нажмите кнопку ниже:",
-            reply_markup=catalog_button(),
-            parse_mode="Markdown"
-        )
-    else:
-        status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
-        await message.answer(
-            f"{status_text}\n\nНажмите кнопку ниже чтобы посмотреть каталог:",
-            reply_markup=catalog_button()
-        )
-
-
-# ===== УПРАВЛЕНИЕ ТОВАРАМИ =====
 
 @dp.message(Command("manage_products"))
 async def manage_products(message: types.Message):
@@ -371,7 +524,6 @@ async def delete_product(callback: types.CallbackQuery):
         await callback.answer("❌ Товар не найден.", show_alert=True)
         return
 
-    # Кнопки подтверждения удаления
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_{product_name}")],
@@ -400,10 +552,7 @@ async def confirm_delete_product(callback: types.CallbackQuery):
         await callback.answer("❌ Товар не найден.", show_alert=True)
         return
 
-    # Удаляем товар
     del PRODUCTS[product_name]
-
-    # Удаляем из статистики если есть
     if product_name in product_stats:
         del product_stats[product_name]
 
@@ -412,8 +561,6 @@ async def confirm_delete_product(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-
-# ===== ОБРАБОТЧИК ДЛЯ РЕДАКТИРОВАНИЯ ТОВАРОВ =====
 
 @dp.message()
 async def handle_edit_product_steps(message: types.Message):
@@ -439,14 +586,10 @@ async def handle_edit_product_steps(message: types.Message):
             await message.answer("❌ Товар с таким названием уже существует!")
             return
 
-        # Сохраняем старые данные
         old_data = PRODUCTS[product_name]
-        # Создаем новый товар с новым именем
         PRODUCTS[new_name] = old_data
-        # Удаляем старый
         del PRODUCTS[product_name]
 
-        # Обновляем статистику если есть
         if product_name in product_stats:
             product_stats[new_name] = product_stats[product_name]
             del product_stats[product_name]
@@ -480,7 +623,6 @@ async def handle_edit_product_steps(message: types.Message):
 
     elif action == "edit_photo":
         if message.photo:
-            # Удаляем старое фото если есть
             old_photo = PRODUCTS[product_name].get("photo")
             if old_photo and old_photo != "default.jpg" and os.path.exists(old_photo):
                 try:
@@ -488,7 +630,6 @@ async def handle_edit_product_steps(message: types.Message):
                 except:
                     pass
 
-            # Сохраняем новое фото
             photo = message.photo[-1]
             file = await bot.get_file(photo.file_id)
             file_path = f"images/{product_name}_{int(time.time())}.jpg"
@@ -503,8 +644,6 @@ async def handle_edit_product_steps(message: types.Message):
         else:
             await message.answer("❌ Пожалуйста, отправьте фото.")
 
-
-# ===== ОСТАЛЬНЫЕ КОМАНДЫ =====
 
 @dp.message(Command("users_count"))
 async def show_users_count(message: types.Message):
@@ -711,351 +850,4 @@ async def confirm_broadcast(callback: types.CallbackQuery):
         if len(failed_users) > 10:
             result_text += f"\n... и еще {len(failed_users) - 10}"
 
-    await callback.message.edit_text(result_text)
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data == "cancel_broadcast")
-async def cancel_broadcast(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет доступа.", show_alert=True)
-        return
-
-    key = f"broadcast_{callback.from_user.id}"
-    if key in TEMP_DATA:
-        del TEMP_DATA[key]
-
-    await callback.message.edit_text("❌ Рассылка отменена.")
-    await callback.answer()
-
-
-@dp.message(Command("setname"))
-async def set_admin_name(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    args = message.text.split(maxsplit=1)
-    if len(args) != 2:
-        await message.answer(
-            "❌ Неправильный формат!\n\n"
-            "Используйте: `/setname Ваше имя`\n"
-            "Например: `/setname Алексей`"
-        )
-        return
-
-    new_name = args[1].strip()
-    if len(new_name) > 50:
-        await message.answer("❌ Имя не может быть длиннее 50 символов.")
-        return
-
-    ADMIN_NAMES[message.from_user.id] = new_name
-    await message.answer(
-        f"✅ Ваше имя успешно установлено!\n\n"
-        f"Теперь приветствие: **Здравствуйте, {new_name}!**",
-        parse_mode="Markdown"
-    )
-
-
-@dp.message(Command("admins"))
-async def show_admins(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    admins_list = []
-    for admin_id in ADMINS:
-        name = await get_admin_name(admin_id)
-        if admin_id == YOUR_TELEGRAM_ID:
-            admins_list.append(f"⭐ {name} (`{admin_id}`) - Главный администратор")
-        else:
-            admins_list.append(f"👤 {name} (`{admin_id}`)")
-
-    admins_text = "\n".join(admins_list)
-    await message.answer(
-        f"👑 **Список администраторов:**\n\n"
-        f"{admins_text}\n\n"
-        f"Всего: {len(ADMINS)} администраторов",
-        parse_mode="Markdown"
-    )
-
-
-@dp.message(Command("add_admin"))
-async def add_admin(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer(
-            "❌ Неправильный формат!\n\n"
-            "Используйте: `/add_admin 123456789`"
-        )
-        return
-
-    try:
-        new_admin_id = int(args[1])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом!")
-        return
-
-    if new_admin_id in ADMINS:
-        await message.answer(f"❌ Пользователь с ID `{new_admin_id}` уже является администратором.",
-                             parse_mode="Markdown")
-        return
-
-    ADMINS.add(new_admin_id)
-    await message.answer(
-        f"✅ Администратор с ID `{new_admin_id}` успешно добавлен!",
-        parse_mode="Markdown"
-    )
-
-    try:
-        new_admin_name = await get_admin_name(new_admin_id)
-        await bot.send_message(
-            chat_id=new_admin_id,
-            text=f"🎉 **Поздравляю, {new_admin_name}! Вы стали администратором бота!**\n\n"
-                 f"Используйте `/start` для просмотра всех команд.",
-            parse_mode="Markdown"
-        )
-    except:
-        pass
-
-
-@dp.message(Command("remove_admin"))
-async def remove_admin(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer(
-            "❌ Неправильный формат!\n\n"
-            "Используйте: `/remove_admin 123456789`"
-        )
-        return
-
-    try:
-        admin_id = int(args[1])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом!")
-        return
-
-    if admin_id == YOUR_TELEGRAM_ID:
-        await message.answer("❌ Вы не можете удалить главного администратора!")
-        return
-
-    if admin_id not in ADMINS:
-        await message.answer(f"❌ Пользователь с ID `{admin_id}` не является администратором.", parse_mode="Markdown")
-        return
-
-    ADMINS.remove(admin_id)
-    if admin_id in ADMIN_NAMES:
-        del ADMIN_NAMES[admin_id]
-
-    await message.answer(
-        f"✅ Администратор с ID `{admin_id}` успешно удален!",
-        parse_mode="Markdown"
-    )
-
-
-@dp.message(Command("pause"))
-async def pause_sales(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    global sales_paused
-    sales_paused = True
-    await message.answer("⏸ Продажи приостановлены!")
-
-
-@dp.message(Command("resume"))
-async def resume_sales(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    global sales_paused
-    sales_paused = False
-    await message.answer("▶️ Продажи возобновлены!")
-
-
-@dp.message(Command("reset_daily"))
-async def reset_daily_orders(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    global user_orders
-    for user_id in user_orders:
-        user_orders[user_id]["daily_orders"] = 0
-        user_orders[user_id]["last_reset_day"] = datetime.now().day
-    await message.answer("✅ Ежедневная статистика заказов сброшена!")
-
-
-@dp.message(Command("reset_all"))
-async def reset_all_orders(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    global user_orders, total_orders_all_time, product_stats, user_order_history
-    user_orders = {}
-    total_orders_all_time = 0
-    product_stats = {}
-    user_order_history = {}
-    await message.answer("✅ **ВСЯ статистика заказов сброшена!**")
-
-
-@dp.message(Command("aarssf"))
-async def reset_orders(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    global user_orders
-    user_orders = {}
-    await message.answer("✅ Статистика заказов успешно сброшена!")
-
-
-# ===== КОМАНДЫ ПОЛЬЗОВАТЕЛЕЙ =====
-
-@dp.callback_query(lambda c: c.data == "catalog")
-async def show_catalog(callback: types.CallbackQuery):
-    add_user(callback.from_user.id)
-    await callback.message.delete()
-    status_text = "🔴 Продажи приостановлены" if sales_paused else "🟢 Продажи активны"
-    await callback.message.answer(
-        f"{status_text}\n\nВсе товары:",
-        reply_markup=product_buttons()
-    )
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("product_") and not c.data.startswith("product_management"))
-async def show_product(callback: types.CallbackQuery):
-    add_user(callback.from_user.id)
-    product_name = callback.data.replace("product_", "")
-    if product_name not in PRODUCTS:
-        await callback.message.answer("❌ Товар не найден.")
-        await callback.answer()
-        return
-
-    data = PRODUCTS[product_name]
-
-    keyboard = order_button(product_name) if not sales_paused else InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🔴 Заказы временно недоступны", callback_data="no_order")]]
-    )
-
-    try:
-        if data['photo'] and data['photo'] != "default.jpg":
-            photo_path = data['photo']
-            if os.path.exists(photo_path):
-                await callback.message.answer_photo(
-                    photo=types.FSInputFile(photo_path),
-                    caption=f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
-                    reply_markup=keyboard
-                )
-            else:
-                await callback.message.answer(
-                    f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
-                    reply_markup=keyboard
-                )
-        else:
-            await callback.message.answer(
-                f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
-                reply_markup=keyboard
-            )
-    except:
-        await callback.message.answer(
-            f"📌 {product_name}\n💰 {data['price']}\n📝 {data['desc']}",
-            reply_markup=keyboard
-        )
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("order_"))
-async def send_order(callback: types.CallbackQuery):
-    global sales_paused
-
-    add_user(callback.from_user.id)
-
-    if sales_paused:
-        await callback.message.answer(
-            "🔴 Извините, продажи временно приостановлены.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
-            )
-        )
-        await callback.answer()
-        return
-
-    user_id = callback.from_user.id
-    product_name = callback.data.replace("order_", "")
-
-    can_order, error_message = check_order_limit(user_id)
-
-    if not can_order:
-        await callback.message.answer(
-            f"{error_message}\n\nВы можете вернуться в каталог:",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
-            )
-        )
-        await callback.answer()
-        return
-
-    username = callback.from_user.username or "нет username"
-
-    order_text = (
-        f"🛍 **Поступил новый заказ!**\n\n"
-        f"📦 Товар: {product_name}\n"
-        f"👤 Username: @{username}\n"
-        f"🆔 ID: {user_id}"
-    )
-
-    for admin_id in ADMINS:
-        try:
-            await bot.send_message(chat_id=admin_id, text=order_text)
-        except:
-            pass
-
-    update_user_order(user_id, product_name)
-
-    await callback.message.answer(
-        f"✅ Заказ создан! Мы свяжемся с вами в ближайшее время.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="📦 Вернуться в каталог", callback_data="catalog")]]
-        )
-    )
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data == "no_order")
-async def no_order_handler(callback: types.CallbackQuery):
-    await callback.answer("Извините, заказы временно недоступны. Попробуйте позже.", show_alert=True)
-
-
-async def main():
-    if not os.path.exists("images"):
-        os.makedirs("images")
-
-    print("🤖 Бот готов для проверки...")
-    print(f"\n👑 Главный администратор: {YOUR_TELEGRAM_ID}")
-    print("\n📋 ДОСТУПНЫЕ КОМАНДЫ АДМИНА:")
-    print("  /pause          - приостановить продажи")
-    print("  /resume         - возобновить продажи")
-    print("  /status         - полная статистика")
-    print("  /reset_daily    - сбросить ежедневную статистику")
-    print("  /reset_all      - сбросить ВСЮ статистику")
-    print("  /add_admin ID   - добавить администратора")
-    print("  /remove_admin ID - удалить администратора")
-    print("  /admins         - список администраторов")
-    print("  /setname Имя    - установить своё имя")
-    print("  /manage_products - управление товарами")
-    print("  /broadcast Текст - массовая рассылка")
-    print("  /users_count    - количество пользователей")
-    print("  /test Текст     - тестовая рассылка")
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await callback
